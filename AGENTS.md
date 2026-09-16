@@ -7,13 +7,13 @@ Cortex is a personal life manager: a cross-platform, hybrid-interface productivi
 - A visual, real-time dashboard for manual user control.
 - A Model Context Protocol (MCP) gateway through which AI agents such as Claude, Cursor, and inline chat can retrieve context and execute actions.
 
-The intended product direction is local-first and self-hostable. The canonical future deployment is a user-managed Docker Compose stack on Linux, a VPS, or a NAS; Cortex-operated cloud infrastructure is not required for the core product. Business logic belongs in a unified Python service layer that serves both REST endpoints for the web client and MCP transports for AI agents. This is a future direction: the current repository contains only an initial backend scaffold.
+The intended product direction is local-first and self-hostable. The canonical future deployment is a user-managed Docker Compose stack on Linux, a VPS, or a NAS; Cortex-operated cloud infrastructure is not required for the core product. Business logic belongs in a unified Python service layer that serves both REST endpoints for the web client and MCP transports for AI agents. The repository now contains the backend service foundation and an initial frontend scaffold; domain workflows and deployment packaging remain to be added.
 
 ### Architecture Baseline
 
 - FastAPI REST routers and a FastMCP tool registry expose the same service functions. Keep these adapters thin and do not duplicate business logic between them.
 - A SQLite-compatible local database file in a mounted application data volume is the planned default persistence model. Turso/libSQL may be evaluated later as an optional adapter; it is not a prerequisite for self-hosting.
-- The frontend is planned as a Next.js 14 App Router application delivered as part of the self-hosted stack; no frontend exists in the current repository.
+- The frontend is a standalone Next.js App Router application under frontend/, using the latest stable Next.js baseline selected at initialization and delivered as part of the self-hosted stack.
 - The Python FastAPI backend is planned to run as a user-managed container; no production container or Compose configuration exists yet.
 - The core product must not require a Cortex-operated cloud service. Optional hosted integrations may be added later only when they do not make local operation dependent on them.
 - Keep deployment portable and avoid introducing a dependency on a heavy managed BaaS platform without an explicit architectural decision.
@@ -77,4 +77,4 @@ The planned numeric aggregation layer tracks cash flow, budgets, and account hea
 
 ## Repository Status and Tooling
 
-This repository currently contains an initial FastAPI/FastMCP backend scaffold under `backend/`. It includes typed settings, health and readiness routes, application composition, and an in-memory storage seam, but no domain models, migrations, authentication, frontend, self-hosting packaging, or deployment configuration. Do not invent project commands or paths. When implementation begins, establish the toolchain deliberately and document verified setup, development, test, and deployment commands in the appropriate project documentation.
+This repository currently contains a FastAPI/FastMCP backend under `backend/` with typed settings, health and readiness routes, application composition, persistent SQLite storage, and local-owner authentication. It also contains an initial Next.js frontend scaffold under `frontend/`. Domain workflows, self-hosting packaging, and deployment configuration remain to be added. Do not invent project commands or paths. Establish and document verified setup, development, test, and deployment commands in the appropriate project documentation.

@@ -1,0 +1,83 @@
+# Cortex Frontend Design Direction
+
+## Product thesis
+
+Cortex is a personal command center for the life already in motion. The
+interface should make the next meaningful action obvious without turning
+private life into an operations dashboard. It should feel calm, dense, and
+deliberate: useful information close at hand, visual noise kept low.
+
+The initial page is only a foundation proof point. Future task, knowledge, and
+finance surfaces should inherit this direction without becoming decorative
+dashboard tiles.
+
+## Visual language
+
+### Palette
+
+Use semantic tokens rather than raw colors in components.
+
+- Paper: #F5F3EC — primary application canvas.
+- Surface: #FFFEFA — cards, panels, and raised reading surfaces.
+- Ink: #202722 — primary text and strong labels.
+- Sage: #68736C — supporting text and quiet status information.
+- Rust: #B85F45 — primary action, active priority, and the single signal color.
+- Border: #D8DDD5 — calm separation between adjacent surfaces.
+
+Dark mode keeps the same relationships: deep green-black canvas, warm light
+text, slightly lifted surfaces, softened sage text, and a lighter rust signal.
+The system preference controls the mode; there is no user toggle yet.
+
+### Typography
+
+- Geist Sans: body copy, labels, headings, and controls.
+- Geist Mono: timestamps, system metadata, IDs, and compact status readouts.
+- Use sentence case and specific copy. Avoid unexplained acronyms and generic
+  productivity language.
+
+Type should establish hierarchy before color or decoration does. Use short
+eyebrow labels, clear titles, compact supporting text, and generous line height
+for longer notes.
+
+### Layout
+
+The future workspace should organize around a primary focus column and a
+secondary context rail:
+
+    [brand + navigation] [today / current focus        ] [context]
+                         [task or note sequence         ] [signals ]
+                         [next action                    ] [memory  ]
+
+Prefer a stable max-width, quiet dividers, shallow cards, and one strong
+accent rail for priority or time. Avoid gradients, glass effects, excessive
+rounded containers, and equal-weight card grids.
+
+### Signature interaction
+
+Priority is expressed as a narrow rust rail paired with explicit time or
+context labeling. The rail is a reinforcement, never the only status cue.
+Completed, blocked, and overdue states must also use text or iconography.
+
+## Interaction states
+
+- Loading: preserve layout geometry with restrained skeletons or reserved
+  blocks; do not flash unrelated content.
+- Empty: explain what belongs here and offer one clear next action.
+- Error: state what failed, preserve useful surrounding context, and provide a
+  retry or recovery path without exposing backend details.
+- Hover: use small surface or border changes, never large motion.
+- Focus: use a high-contrast visible ring and keep keyboard order logical.
+- Reduced motion: disable non-essential transitions and animated emphasis.
+
+## Responsive behavior
+
+Design mobile-first. Collapse secondary context below the primary focus rather
+than shrinking dense panels until text becomes unreadable. Keep touch targets
+comfortable, prevent horizontal scrolling, and preserve the order of the
+user's next action, supporting context, and navigation.
+
+## Accessibility baseline
+
+Use semantic landmarks, heading hierarchy, native controls, explicit labels,
+descriptive link text, and status announcements for asynchronous changes.
+Contrast must remain readable in both themes and at increased text scale.
