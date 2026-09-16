@@ -1,0 +1,340 @@
+"use client";
+
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { z } from "zod";
+import { Button } from "@/components/ui/button";
+import { ApiError } from "@/lib/api/client";
+import {
+  authQueryKey,
+  describeAuthError,
+  setupOwner,
+  verifySetupSecret,
+} from "../api";
+import { InlineError } from "./auth-layout";
+import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
+import { PasswordField } from "./password-field";
+
+const ownerDetailsSchema = z
+  .object({
+    email: z.string().trim().email("Enter a valid email address."),
+    password: z
+      .string()
+      .min(12, "Use at least 12 characters.")
+      .max(128, "Use 128 characters or fewer."),
+    confirmation: z.string(),
+  })
+  .superRefine((value, context) => {
+    if (value.password !== value.confirmation) {
+      context.addIssue({
+        code: "custom",
+        path: ["confirmation"],
+        message: "Passwords must match.",
+      });
+    }
+  });
+
+export function SetupWizard() {
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState<1 | 2>(1);
+  const [setupSecret, setSetupSecret] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [secretError, setSecretError] = useState<string>();
+  const [errors, setErrors] = useState<{
+    email?: string;
+    password?: string;
+    confirmation?: string;
+  }>({});
+  const [formError, setFormError] = useState<string>();
+  const [formErrorCode, setFormErrorCode] = useState<string>();
+
+  const secretMutation = useMutation({
+    mutationFn: verifySetupSecret,
+    onSuccess: () => {
+      setSecretError(undefined);
+      setFormError(undefined);
+      setFormErrorCode(undefined);
+      setStep(2);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "invalid_setup_secret") {
+        setSecretError(describeAuthError(error));
+        setFormError(undefined);
+        setFormErrorCode(undefined);
+        return;
+      }
+
+      setSecretError(undefined);
+      setFormError(describeAuthError(error));
+      setFormErrorCode(error instanceof ApiError ? error.code : undefined);
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: setupOwner,
+    onSuccess: (user) => {
+      queryClient.setQueryData(authQueryKey, user);
+      setSetupSecret("");
+      setPassword("");
+      setConfirmation("");
+      router.replace("/");
+    },
+    onError: (error) => {
+      setPassword("");
+      setConfirmation("");
+      setFormError(describeAuthError(error));
+      setFormErrorCode(error instanceof ApiError ? error.code : undefined);
+    },
+  });
+
+  function continueToOwnerDetails() {
+    setSecretError(undefined);
+    setFormError(undefined);
+    setFormErrorCode(undefined);
+    if (!setupSecret) {
+      setSecretError("Enter the setup secret configured for this installation.");
+      return;
+    }
+    secretMutation.mutate(setupSecret);
+  }
+
+  function submitOwnerDetails() {
+    setFormError(undefined);
+    setFormErrorCode(undefined);
+    const result = ownerDetailsSchema.safeParse({ email, password, confirmation });
+
+    if (!result.success) {
+      const nextErrors: {
+        email?: string;
+        password?: string;
+        confirmation?: string;
+      } = {};
+      for (const issue of result.error.issues) {
+        const field = issue.path[0];
+        if (field === "email" || field === "password" || field === "confirmation") {
+          nextErrors[field] = issue.message;
+        }
+      }
+      setErrors(nextErrors);
+      return;
+    }
+
+    setErrors({});
+    mutation.mutate({
+      email: result.data.email,
+      password: result.data.password,
+      setupSecret,
+    });
+  }
+
+  return (
+    <div className="space-y-7">
+      <div
+        className="flex items-center justify-between gap-4"
+        role="group"
+        aria-label="Setup progress"
+      >
+        <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+          <span className="flex size-6 items-center justify-center rounded-full bg-primary font-mono text-[0.68rem] text-primary-foreground">
+            {step === 1 ? "1" : <Check aria-hidden="true" className="size-3.5" />}
+          </span>
+          <span className={step === 1 ? "" : "text-muted-foreground"}>Access</span>
+        </div>
+        <div className="h-px flex-1 bg-border" aria-hidden="true" />
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <span
+            className={
+              "flex size-6 items-center justify-center rounded-full font-mono text-[0.68rem] " +
+              (step === 2
+                ? "bg-primary text-primary-foreground"
+                : "border border-border text-muted-foreground")
+            }
+          >
+            2
+          </span>
+          <span className={step === 2 ? "text-foreground" : "text-muted-foreground"}>
+            Owner
+          </span>
+        </div>
+      </div>
+
+      {formError ? (
+        <div className="space-y-2">
+          <InlineError message={formError} />
+          {formErrorCode === "auth_already_initialized" ? (
+            <Link
+              href="/login"
+              className="inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            >
+              Sign in instead
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
+      {step === 1 ? (
+        <form
+          className="space-y-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            continueToOwnerDetails();
+          }}
+          noValidate
+        >
+          <div>
+            <h2 className="text-xl font-medium tracking-[-0.02em] text-foreground">
+              Connect this installation
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Enter the one-time secret supplied when the local Cortex service was started.
+              It stays in this tab until setup is complete.
+            </p>
+          </div>
+          <FormField
+            id="setup-secret"
+            label="Setup secret"
+            hint="This is the value of CORTEX_SETUP_SECRET, not your owner password."
+            error={secretError}
+          >
+            <input
+              id="setup-secret"
+              name="setup-secret"
+              type="password"
+              className={inputClassName}
+              autoComplete="off"
+              autoFocus
+              value={setupSecret}
+              aria-invalid={Boolean(secretError) || undefined}
+              aria-describedby={fieldDescribedBy(
+                "setup-secret",
+                "This is the value of CORTEX_SETUP_SECRET, not your owner password.",
+                secretError,
+              )}
+              onChange={(event) => {
+                setSetupSecret(event.target.value);
+                setSecretError(undefined);
+                setFormError(undefined);
+                setFormErrorCode(undefined);
+              }}
+              disabled={secretMutation.isPending}
+            />
+          </FormField>
+          <Button
+            type="submit"
+            size="lg"
+            className="w-full"
+            disabled={secretMutation.isPending}
+          >
+            {secretMutation.isPending ? (
+              "Checking…"
+            ) : (
+              <>
+                Continue <ArrowRight data-icon="inline-end" aria-hidden="true" />
+              </>
+            )}
+          </Button>
+          <p className="text-center text-xs leading-5 text-muted-foreground">
+            Already initialized?{" "}
+            <Link
+              href="/login"
+              className="font-medium text-primary underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            >
+              Sign in instead
+            </Link>
+          </p>
+        </form>
+      ) : (
+        <form
+          className="space-y-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitOwnerDetails();
+          }}
+          noValidate
+        >
+          <div>
+            <h2 className="text-xl font-medium tracking-[-0.02em] text-foreground">
+              Create the owner account
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              This account controls the local workspace. Use a password you can keep secure.
+            </p>
+          </div>
+          <FormField id="setup-email" label="Owner email" error={errors.email}>
+            <input
+              id="setup-email"
+              name="email"
+              type="email"
+              className={inputClassName}
+              autoComplete="email"
+              autoFocus
+              value={email}
+              aria-invalid={Boolean(errors.email) || undefined}
+              aria-describedby={fieldDescribedBy("setup-email", undefined, errors.email)}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setErrors((current) => ({ ...current, email: undefined }));
+                setFormError(undefined);
+              }}
+              disabled={mutation.isPending}
+            />
+          </FormField>
+          <PasswordField
+            id="setup-password"
+            name="password"
+            label="Password"
+            hint="At least 12 characters."
+            autoComplete="new-password"
+            value={password}
+            onChange={(event) => {
+              setPassword(event.target.value);
+              setErrors((current) => ({ ...current, password: undefined }));
+              setFormError(undefined);
+            }}
+            error={errors.password}
+            disabled={mutation.isPending}
+          />
+          <PasswordField
+            id="setup-confirmation"
+            name="confirmation"
+            label="Confirm password"
+            autoComplete="new-password"
+            value={confirmation}
+            onChange={(event) => {
+              setConfirmation(event.target.value);
+              setErrors((current) => ({ ...current, confirmation: undefined }));
+              setFormError(undefined);
+            }}
+            error={errors.confirmation}
+            disabled={mutation.isPending}
+          />
+          <div className="grid gap-3 sm:grid-cols-[auto_1fr]">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                setStep(1);
+                setErrors({});
+                setFormError(undefined);
+              }}
+              disabled={mutation.isPending}
+            >
+              <ArrowLeft aria-hidden="true" />
+              Back
+            </Button>
+            <Button type="submit" size="lg" disabled={mutation.isPending}>
+              {mutation.isPending ? "Creating owner…" : "Create owner"}
+            </Button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}

@@ -60,6 +60,17 @@ def normalize_email(value: str) -> str:
     return value.strip().casefold()
 
 
+def validate_setup_secret(settings: Settings, setup_secret: str | None) -> None:
+    """Validate the configured installation secret without changing application state."""
+
+    if settings.setup_secret is None:
+        raise SetupNotConfiguredError()
+    if setup_secret is None or not secrets.compare_digest(
+        settings.setup_secret.get_secret_value(), setup_secret
+    ):
+        raise InvalidSetupSecretError()
+
+
 def _user_record(user: User) -> UserRecord:
     return UserRecord(id=user.id, email=user.email, created_at=user.created_at)
 
@@ -90,13 +101,7 @@ async def setup_owner(
 ) -> AuthResult:
     """Create the one local owner and immediately authenticate the browser."""
 
-    if settings.setup_secret is None:
-        raise SetupNotConfiguredError()
-    if setup_secret is None:
-        raise InvalidSetupSecretError()
-
-    if not secrets.compare_digest(settings.setup_secret.get_secret_value(), setup_secret):
-        raise InvalidSetupSecretError()
+    validate_setup_secret(settings, setup_secret)
 
     normalized_email = normalize_email(email)
     now = utc_now()

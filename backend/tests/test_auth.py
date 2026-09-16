@@ -113,6 +113,45 @@ async def test_setup_fails_closed_without_or_with_wrong_secret(client: AsyncClie
     assert invalid.status_code == 403
 
 
+async def test_setup_secret_verification_is_side_effect_free(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/v1/auth/setup/verify",
+        headers={"X-Setup-Secret": "test-setup-secret"},
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert client.cookies.get("cortex_session") is None
+    assert client.cookies.get("cortex_csrf") is None
+
+    created = await setup_owner(client)
+    assert created["email"] == "owner@example.com"
+
+
+async def test_setup_secret_verification_fails_closed(client: AsyncClient) -> None:
+    invalid = await client.post(
+        "/api/v1/auth/setup/verify",
+        headers={"X-Setup-Secret": "wrong"},
+    )
+    assert invalid.status_code == 403
+    assert invalid.json() == {
+        "detail": {
+            "code": "invalid_setup_secret",
+            "message": "The setup secret is invalid.",
+        }
+    }
+
+    client._transport.app.state.settings.setup_secret = None
+    missing = await client.post("/api/v1/auth/setup/verify")
+    assert missing.status_code == 503
+    assert missing.json() == {
+        "detail": {
+            "code": "setup_not_configured",
+            "message": "Owner setup is not configured.",
+        }
+    }
+
+
 async def test_setup_rejects_cross_origin_requests(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/auth/setup",
@@ -124,6 +163,15 @@ async def test_setup_rejects_cross_origin_requests(client: AsyncClient) -> None:
     )
 
     assert response.status_code == 403
+
+    verify_response = await client.post(
+        "/api/v1/auth/setup/verify",
+        headers={
+            "Origin": "https://attacker.example",
+            "X-Setup-Secret": "test-setup-secret",
+        },
+    )
+    assert verify_response.status_code == 403
 
 
 async def test_login_has_generic_invalid_credentials_and_supports_casefolded_email(

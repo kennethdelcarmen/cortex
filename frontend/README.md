@@ -13,10 +13,14 @@ Run from this directory:
 
 Open http://localhost:3000.
 
-Copy .env.example to .env.local when connecting to the local backend. The
-browser API URL is configured with NEXT_PUBLIC_API_URL. The backend must allow
-http://localhost:3000 in CORTEX_CORS_ORIGINS before authenticated requests are
-made.
+Copy .env.example to .env.local when connecting to the local backend. Keep the
+frontend and API hostnames consistent locally (localhost for both) because the
+browser session and CSRF cookies are host-scoped. The browser API URL is
+configured with NEXT_PUBLIC_API_URL. The backend must allow http://localhost:3000
+in CORTEX_CORS_ORIGINS before authenticated requests are made. On a new
+installation, open /setup, enter the CORTEX_SETUP_SECRET configured for the
+backend, and verify it before creating the first owner account. Returning users
+can sign in at /login.
 
 ## Project conventions
 

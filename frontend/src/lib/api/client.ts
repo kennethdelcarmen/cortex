@@ -132,6 +132,14 @@ export async function apiFetch<T>(
     return undefined as T;
   }
 
-  const payload: unknown = await response.json();
-  return schema ? schema.parse(payload) : (payload as T);
+  try {
+    const payload: unknown = await response.json();
+    return schema ? schema.parse(payload) : (payload as T);
+  } catch {
+    throw new ApiError(
+      response.status,
+      "invalid_response",
+      "The Cortex service returned an unexpected response.",
+    );
+  }
 }

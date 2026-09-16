@@ -65,6 +65,10 @@ token, then send that value in `X-CSRF-Token` together with the cookie for
 unsafe authenticated requests. Configure browser origins as a JSON array in
 `CORTEX_CORS_ORIGINS`, for example
 `["http://localhost:3000"]`; the default is deny-all for cross-origin access.
+The browser setup wizard first verifies the secret with
+`POST /api/v1/auth/setup/verify` using the `X-Setup-Secret` header; this request
+does not create an owner or session. Owner creation still happens only through
+`POST /api/v1/auth/setup`.
 
 The initial service exposes:
 

@@ -21,6 +21,7 @@ from ..auth.service import (
     logout,
     refresh_csrf_token,
     setup_owner,
+    validate_setup_secret,
 )
 from ..auth.throttling import LoginThrottle
 from ..config import Settings
@@ -101,6 +102,20 @@ async def _require_csrf_auth(
     except AuthError as exc:
         _raise_http(exc)
     return auth
+
+
+@router.post("/setup/verify", status_code=status.HTTP_204_NO_CONTENT)
+async def verify_setup_secret_route(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """Verify the installation setup secret without creating an owner or session."""
+
+    _validate_public_origin(request, settings)
+    try:
+        validate_setup_secret(settings, request.headers.get("x-setup-secret"))
+    except AuthError as exc:
+        _raise_http(exc)
 
 
 @router.post("/setup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
