@@ -18,7 +18,8 @@ functions, and translate results and errors back to their protocol. Do not
 duplicate business rules in a router or tool handler.
 
 The initial scaffold intentionally contains no domain models, migrations,
-authentication, or Turso connection. Add those at the first domain vertical
+authentication, persistent database adapter, or self-hosting packaging. It also
+does not contain a Turso connection. Add those at the first domain vertical
 slice with explicit compatibility and rollout decisions.
 
 ## Layout and ownership
@@ -58,13 +59,16 @@ must not become the owner of persistence or business policy.
 
 Persistence is represented by small async protocols. The in-memory adapter is
 for deterministic tests and local bootstrap behavior; it is not a production
-store. The planned Turso/libSQL adapter must preserve explicit ownership,
-transaction boundaries, vector-storage compatibility, and offline-first
-synchronization invariants.
+store. The planned default is a SQLite-compatible local database file in a
+mounted application data volume. A Turso/libSQL adapter may be considered later
+as an optional backend, but it is not the current baseline. Any future adapter
+must preserve explicit ownership, transaction boundaries, and migration
+compatibility.
 
-Schema changes, migrations, backfills, retention, and synchronization behavior
-must be documented and tested as compatibility changes. Do not hide database
-calls inside route handlers or use an unbounded query by default.
+Schema changes, migrations, backfills, retention, backup/restore behavior, and
+any future synchronization behavior must be documented and tested as
+compatibility changes. Offline-first mobile synchronization is deferred. Do not
+hide database calls inside route handlers or use an unbounded query by default.
 
 ## MCP conventions
 

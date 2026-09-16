@@ -7,29 +7,30 @@ Cortex is a personal life manager: a cross-platform, hybrid-interface productivi
 - A visual, real-time dashboard for manual user control.
 - A Model Context Protocol (MCP) gateway through which AI agents such as Claude, Cursor, and inline chat can retrieve context and execute actions.
 
-The current architecture baseline is a $0-cost, serverless/edge-native system. Business logic belongs in a unified Python service layer that serves both REST endpoints for the web client and Server-Sent Events (SSE) for MCP tools.
+The intended product direction is local-first and self-hostable. The canonical future deployment is a user-managed Docker Compose stack on Linux, a VPS, or a NAS; Cortex-operated cloud infrastructure is not required for the core product. Business logic belongs in a unified Python service layer that serves both REST endpoints for the web client and MCP transports for AI agents. This is a future direction: the current repository contains only an initial backend scaffold.
 
 ### Architecture Baseline
 
 - FastAPI REST routers and a FastMCP tool registry expose the same service functions. Keep these adapters thin and do not duplicate business logic between them.
-- Turso (libSQL) is the planned embedded edge database, providing distributed SQLite storage, local reads, vector embeddings through `libsql_vector`, and offline-first mobile synchronization.
-- The frontend is planned as a Next.js 14 App Router application hosted on Vercel.
-- The Python FastAPI backend is planned for a free-tier serverless deployment on Koyeb or Render.
+- A SQLite-compatible local database file in a mounted application data volume is the planned default persistence model. Turso/libSQL may be evaluated later as an optional adapter; it is not a prerequisite for self-hosting.
+- The frontend is planned as a Next.js 14 App Router application delivered as part of the self-hosted stack; no frontend exists in the current repository.
+- The Python FastAPI backend is planned to run as a user-managed container; no production container or Compose configuration exists yet.
+- The core product must not require a Cortex-operated cloud service. Optional hosted integrations may be added later only when they do not make local operation dependent on them.
 - Keep deployment portable and avoid introducing a dependency on a heavy managed BaaS platform without an explicit architectural decision.
 
 ### Primary Modules
 
 #### Task and Schedule Engine
 
-The execution layer handles structured execution, time-blocking, and daily priorities. It supports Kanban boards, calendar views, drag-and-drop status tracking, AI-generated focus blocks, daily agendas, and automatic rescheduling of overdue items. Its relational data includes tasks, priority tags, and time-block constraints.
+The planned execution layer handles structured execution, time-blocking, and daily priorities. Future scope includes Kanban boards, calendar views, drag-and-drop status tracking, AI-generated focus blocks, daily agendas, and automatic rescheduling of overdue items. Its relational data includes tasks, priority tags, and time-block constraints.
 
 #### Second Brain and Knowledge Base
 
-The RAG and semantic-memory layer indexes Markdown files, journals, and daily reflections. It stores document metadata, raw text chunks, and 1536-dimensional `F32_BLOB` vector embeddings in Turso for semantic retrieval and visual document management.
+The planned RAG and semantic-memory layer indexes Markdown files, journals, and daily reflections. Local full-text search is the baseline retrieval capability. Optional semantic retrieval may use a configured provider later; vector embeddings and their storage format are deferred and must not be treated as current implementation requirements.
 
 #### Financial and Expense Engine
 
-The numeric aggregation layer tracks cash flow, budgets, and account health. It computes balances, monthly category limits, and spending progress, and supports natural-language expense logging and budget checks. Its relational data includes accounts, categorized transaction ledgers, and monthly budget allocations.
+The planned numeric aggregation layer tracks cash flow, budgets, and account health. Future scope includes balances, monthly category limits, spending progress, natural-language expense logging, and budget checks. Its relational data includes accounts, categorized transaction ledgers, and monthly budget allocations.
 
 ## Engineering Standards
 
@@ -37,7 +38,7 @@ The numeric aggregation layer tracks cash flow, budgets, and account health. It 
 
 - Put domain behavior in focused service functions with explicit inputs, outputs, and error semantics.
 - Keep REST and MCP interfaces behaviorally aligned by routing both through the shared service layer.
-- Keep data ownership and lifecycle visible. Treat schema changes, migrations, synchronization, and vector storage as explicit compatibility concerns.
+- Keep data ownership and lifecycle visible. Treat schema changes, migrations, synchronization, and vector storage as explicit compatibility concerns. Offline-first mobile synchronization is deferred and must not be assumed by current work.
 - Prefer small, reversible changes that match existing module boundaries. Avoid abstractions and broad refactors without a concrete ownership or maintenance benefit.
 
 ### Correctness, security, and privacy
@@ -45,7 +46,7 @@ The numeric aggregation layer tracks cash flow, budgets, and account health. It 
 - Treat user input, files, network responses, database content, and environment values as untrusted.
 - Minimize data exposure and retention. Never log credentials, tokens, secrets, or unnecessary personal or financial data.
 - Make authentication, authorization, validation, and audit-sensitive behavior explicit and reviewable.
-- Preserve offline-first and synchronization invariants when changing persistence or mutation behavior.
+- Preserve data integrity when changing persistence or mutation behavior. If offline synchronization is introduced later, document its invariants explicitly before implementation.
 
 ### User experience and accessibility
 
@@ -76,4 +77,4 @@ The numeric aggregation layer tracks cash flow, budgets, and account health. It 
 
 ## Repository Status and Tooling
 
-This repository is currently a bootstrap repository with no implementation files, manifests, directory conventions, dependency definitions, test runner, or deployment configuration. Do not invent project commands or paths. When implementation begins, establish the toolchain deliberately and document verified setup, development, test, and deployment commands in the appropriate project documentation.
+This repository currently contains an initial FastAPI/FastMCP backend scaffold under `backend/`. It includes typed settings, health and readiness routes, application composition, and an in-memory storage seam, but no domain models, migrations, authentication, frontend, self-hosting packaging, or deployment configuration. Do not invent project commands or paths. When implementation begins, establish the toolchain deliberately and document verified setup, development, test, and deployment commands in the appropriate project documentation.

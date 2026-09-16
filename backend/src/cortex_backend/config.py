@@ -1,6 +1,7 @@
 """Typed environment-backed backend settings."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     environment: Literal["local", "test", "staging", "production"] = "local"
     log_level: str = "INFO"
     service_version: str = "0.1.0"
+    database_path: Path = Path("data/cortex.db")
 
 
 @lru_cache(maxsize=1)
