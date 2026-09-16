@@ -4,6 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     service_version: str = "0.1.0"
     database_path: Path = Path("data/cortex.db")
+    setup_secret: SecretStr | None = None
+    cors_origins: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_production_setup_secret(self) -> "Settings":
+        """Refuse a production configuration that cannot bootstrap its owner."""
+
+        if self.environment == "production" and self.setup_secret is None:
+            raise ValueError("CORTEX_SETUP_SECRET is required in production.")
+        return self
 
 
 @lru_cache(maxsize=1)

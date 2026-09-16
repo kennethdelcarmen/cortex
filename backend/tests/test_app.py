@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from cortex_backend.app import create_app
 from cortex_backend.config import Settings
@@ -76,6 +77,17 @@ async def test_sqlite_storage_readiness_creates_database_file(tmp_path) -> None:
     await storage.close()
 
     assert database_path.is_file()
+
+
+async def test_sqlite_storage_enables_foreign_keys(tmp_path) -> None:
+    storage = SQLiteStorage(tmp_path / "cortex.db")
+
+    await storage.check_ready()
+    async with storage.session() as session:
+        result = await session.execute(text("PRAGMA foreign_keys"))
+
+    await storage.close()
+    assert result.scalar_one() == 1
 
 
 async def test_readyz_returns_stable_error_for_invalid_sqlite_path(tmp_path) -> None:

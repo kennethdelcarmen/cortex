@@ -1,9 +1,11 @@
 """Persistence contracts and storage adapters."""
 
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -18,6 +20,14 @@ class Storage(Protocol):
 
     async def check_ready(self) -> None:
         """Raise when the backing store cannot serve requests."""
+
+
+@runtime_checkable
+class DatabaseStorage(Storage, Protocol):
+    """Persistence boundary for services that need transactional SQL access."""
+
+    def session(self) -> AbstractAsyncContextManager[AsyncSession]:
+        """Return an application-owned asynchronous database session."""
 
 
 @runtime_checkable
@@ -54,6 +64,16 @@ class SQLiteStorage:
             expire_on_commit=False,
         )
 
+        @event.listens_for(self._engine.sync_engine, "connect")
+        def enable_sqlite_foreign_keys(dbapi_connection: Any, _: Any) -> None:
+            """Enable SQLite foreign-key enforcement for every pooled connection."""
+
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA foreign_keys=ON")
+            finally:
+                cursor.close()
+
     @property
     def database_path(self) -> Path:
         """Return the configured database file path."""
@@ -66,6 +86,13 @@ class SQLiteStorage:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
+
+    @asynccontextmanager
+    async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield a transactional-capable session without hiding commit policy."""
+
+        async with self._session_factory() as session:
+            yield session
 
     async def close(self) -> None:
         """Dispose the engine and any pooled resources."""
