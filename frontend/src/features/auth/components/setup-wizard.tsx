@@ -6,7 +6,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { z } from "zod";
+import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
 import {
   authQueryKey,
@@ -14,9 +16,15 @@ import {
   setupOwner,
   verifySetupSecret,
 } from "../api";
-import { InlineError } from "./auth-layout";
 import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
 import { PasswordField } from "./password-field";
+
+type SetupBlockingError = {
+  title: string;
+  description: string;
+  actionLabel: string;
+  onAction: () => void;
+};
 
 const ownerDetailsSchema = z
   .object({
@@ -40,6 +48,7 @@ const ownerDetailsSchema = z
 export function SetupWizard() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const feedback = useFeedback();
   const [step, setStep] = useState<1 | 2>(1);
   const [setupSecret, setSetupSecret] = useState("");
   const [email, setEmail] = useState("");
@@ -51,28 +60,46 @@ export function SetupWizard() {
     password?: string;
     confirmation?: string;
   }>({});
-  const [formError, setFormError] = useState<string>();
-  const [formErrorCode, setFormErrorCode] = useState<string>();
+  const [blockingError, setBlockingError] = useState<SetupBlockingError>();
 
   const secretMutation = useMutation({
     mutationFn: verifySetupSecret,
     onSuccess: () => {
       setSecretError(undefined);
-      setFormError(undefined);
-      setFormErrorCode(undefined);
+      setBlockingError(undefined);
       setStep(2);
     },
     onError: (error) => {
       if (error instanceof ApiError && error.code === "invalid_setup_secret") {
         setSecretError(describeAuthError(error));
-        setFormError(undefined);
-        setFormErrorCode(undefined);
         return;
       }
 
       setSecretError(undefined);
-      setFormError(describeAuthError(error));
-      setFormErrorCode(error instanceof ApiError ? error.code : undefined);
+      if (error instanceof ApiError && error.code === "auth_already_initialized") {
+        setBlockingError({
+          title: "This installation is already initialized.",
+          description: "The owner account already exists. Sign in to continue.",
+          actionLabel: "Sign in instead",
+          onAction: () => router.replace("/login"),
+        });
+        return;
+      }
+
+      if (error instanceof ApiError && error.code === "setup_not_configured") {
+        setBlockingError({
+          title: "Setup is unavailable.",
+          description: describeAuthError(error),
+          actionLabel: "Try again",
+          onAction: () => secretMutation.mutate(setupSecret),
+        });
+        return;
+      }
+
+      feedback.error({
+        title: "Setup check failed",
+        description: describeAuthError(error),
+      });
     },
   });
 
@@ -88,15 +115,39 @@ export function SetupWizard() {
     onError: (error) => {
       setPassword("");
       setConfirmation("");
-      setFormError(describeAuthError(error));
-      setFormErrorCode(error instanceof ApiError ? error.code : undefined);
+      if (error instanceof ApiError && error.code === "auth_already_initialized") {
+        setBlockingError({
+          title: "This installation is already initialized.",
+          description: "The owner account already exists. Sign in to continue.",
+          actionLabel: "Sign in instead",
+          onAction: () => router.replace("/login"),
+        });
+        return;
+      }
+
+      if (error instanceof ApiError && error.code === "setup_not_configured") {
+        setBlockingError({
+          title: "Setup is unavailable.",
+          description: describeAuthError(error),
+          actionLabel: "Return to access step",
+          onAction: () => {
+            setStep(1);
+            setBlockingError(undefined);
+          },
+        });
+        return;
+      }
+
+      feedback.error({
+        title: "Owner account could not be created",
+        description: describeAuthError(error),
+      });
     },
   });
 
   function continueToOwnerDetails() {
     setSecretError(undefined);
-    setFormError(undefined);
-    setFormErrorCode(undefined);
+    setBlockingError(undefined);
     if (!setupSecret) {
       setSecretError("Enter the setup secret configured for this installation.");
       return;
@@ -105,8 +156,7 @@ export function SetupWizard() {
   }
 
   function submitOwnerDetails() {
-    setFormError(undefined);
-    setFormErrorCode(undefined);
+    setBlockingError(undefined);
     const result = ownerDetailsSchema.safeParse({ email, password, confirmation });
 
     if (!result.success) {
@@ -164,18 +214,18 @@ export function SetupWizard() {
         </div>
       </div>
 
-      {formError ? (
-        <div className="space-y-2">
-          <InlineError message={formError} />
-          {formErrorCode === "auth_already_initialized" ? (
-            <Link
-              href="/login"
-              className="inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
-            >
-              Sign in instead
-            </Link>
-          ) : null}
-        </div>
+      {blockingError ? (
+        <BlockingErrorDialog
+          open
+          title={blockingError.title}
+          description={blockingError.description}
+          action={{
+            label: blockingError.actionLabel,
+            onClick: blockingError.onAction,
+            pending: secretMutation.isPending || mutation.isPending,
+            pendingLabel: "Working…",
+          }}
+        />
       ) : null}
 
       {step === 1 ? (
@@ -202,7 +252,7 @@ export function SetupWizard() {
             hint="This is the value of CORTEX_SETUP_SECRET, not your owner password."
             error={secretError}
           >
-            <input
+            <Input
               id="setup-secret"
               name="setup-secret"
               type="password"
@@ -219,8 +269,6 @@ export function SetupWizard() {
               onChange={(event) => {
                 setSetupSecret(event.target.value);
                 setSecretError(undefined);
-                setFormError(undefined);
-                setFormErrorCode(undefined);
               }}
               disabled={secretMutation.isPending}
             />
@@ -267,7 +315,7 @@ export function SetupWizard() {
             </p>
           </div>
           <FormField id="setup-email" label="Owner email" error={errors.email}>
-            <input
+            <Input
               id="setup-email"
               name="email"
               type="email"
@@ -280,7 +328,6 @@ export function SetupWizard() {
               onChange={(event) => {
                 setEmail(event.target.value);
                 setErrors((current) => ({ ...current, email: undefined }));
-                setFormError(undefined);
               }}
               disabled={mutation.isPending}
             />
@@ -295,7 +342,6 @@ export function SetupWizard() {
             onChange={(event) => {
               setPassword(event.target.value);
               setErrors((current) => ({ ...current, password: undefined }));
-              setFormError(undefined);
             }}
             error={errors.password}
             disabled={mutation.isPending}
@@ -309,7 +355,6 @@ export function SetupWizard() {
             onChange={(event) => {
               setConfirmation(event.target.value);
               setErrors((current) => ({ ...current, confirmation: undefined }));
-              setFormError(undefined);
             }}
             error={errors.confirmation}
             disabled={mutation.isPending}
@@ -322,7 +367,7 @@ export function SetupWizard() {
               onClick={() => {
                 setStep(1);
                 setErrors({});
-                setFormError(undefined);
+                setBlockingError(undefined);
               }}
               disabled={mutation.isPending}
             >

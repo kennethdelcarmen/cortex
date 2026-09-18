@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 
 from ..auth.errors import AuthError
+from ..auth.security import validate_csrf, validate_request_origin
 from ..auth.service import CurrentAuth, authenticate_session
 from ..auth.throttling import LoginThrottle
 from ..config import Settings
@@ -64,3 +65,21 @@ async def get_current_auth(
             status_code=exc.status_code,
             detail={"code": exc.code, "message": exc.message},
         ) from exc
+
+
+async def require_csrf_auth(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> CurrentAuth:
+    """Require an authenticated browser request with valid origin and CSRF proof."""
+
+    try:
+        validate_request_origin(request, settings, required=True)
+        validate_csrf(request, auth.csrf_token_hash)
+    except AuthError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    return auth

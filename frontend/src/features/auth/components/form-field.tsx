@@ -1,7 +1,14 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 export const inputClassName =
-  "mt-2 flex h-11 w-full rounded-lg border border-input bg-background/70 px-3 text-sm text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-3 aria-[invalid=true]:ring-destructive/15";
+  "mt-2 h-11 bg-background/70 text-foreground shadow-sm";
 
 type FormFieldProps = {
   id: string;
@@ -26,22 +33,22 @@ export function FormField({ id, label, hint, error, children }: FormFieldProps) 
   const errorId = error ? id + "-error" : undefined;
 
   return (
-    <div>
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
+    <Field data-invalid={Boolean(error) || undefined} className="gap-1.5">
+      <FieldLabel htmlFor={id} className="text-sm text-foreground">
         {label}
-      </label>
+      </FieldLabel>
       {hint ? (
-        <p id={hintId} className="mt-1 text-xs leading-5 text-muted-foreground">
+        <FieldDescription id={hintId} className="text-xs leading-5">
           {hint}
-        </p>
+        </FieldDescription>
       ) : null}
       <div>{children}</div>
       {error ? (
-        <p id={errorId} role="alert" className="mt-2 text-xs leading-5 text-destructive">
+        <FieldError id={errorId} className="text-xs leading-5">
           {error}
-        </p>
+        </FieldError>
       ) : null}
-    </div>
+    </Field>
   );
 }
 
@@ -62,7 +69,7 @@ export function TextField({
 }: TextFieldProps) {
   return (
     <FormField id={id} label={label} hint={hint} error={error}>
-      <input
+      <Input
         id={id}
         className={inputClassName + (className ? " " + className : "")}
         aria-invalid={Boolean(error) || undefined}

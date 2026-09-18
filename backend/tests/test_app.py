@@ -116,15 +116,15 @@ async def test_versioned_api_reports_service_metadata() -> None:
     assert body == {"service": "Test Cortex", "api_version": "v1"}
 
 
-async def test_mcp_transport_is_explicitly_deferred() -> None:
+async def test_mcp_transport_requires_bearer_authentication() -> None:
     app = create_app()
 
-    status_code, body = await request(app, "/mcp")
+    status_code, body = await request(app, "/mcp/")
 
-    assert status_code == 501
+    assert status_code == 401
     assert body == {
-        "code": "mcp_transport_not_configured",
-        "message": "MCP transport is not configured yet.",
+        "code": "unauthenticated",
+        "message": "Authentication is required.",
     }
 
 

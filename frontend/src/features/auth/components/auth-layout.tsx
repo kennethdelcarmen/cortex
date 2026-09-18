@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type AuthLayoutProps = {
   eyebrow?: string;
@@ -38,9 +40,9 @@ export function AuthLayout({
         </section>
 
         <section className="w-full">
-          <div className="rounded-2xl border border-border/80 bg-card p-6 shadow-[0_24px_80px_-44px_color-mix(in_oklab,var(--primary)_40%,transparent)] sm:p-8">
+          <Card className="rounded-2xl border-border/80 p-6 shadow-[0_24px_80px_-44px_color-mix(in_oklab,var(--primary)_40%,transparent)] sm:p-8">
             {children}
-          </div>
+          </Card>
           {footer ? (
             <p className="mt-5 text-center text-sm text-muted-foreground">
               {footer}
@@ -58,29 +60,17 @@ export function AuthLoading({ message = "Checking your workspace…" }: { messag
       className="flex min-h-[100svh] items-center justify-center bg-background px-5 py-8"
       aria-busy="true"
     >
-      <div className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-8 shadow-[0_24px_80px_-44px_color-mix(in_oklab,var(--primary)_40%,transparent)]">
-        <div className="motion-safe:animate-pulse">
-          <div className="h-3 w-36 rounded-full bg-muted" />
-          <div className="mt-5 h-10 w-4/5 rounded-lg bg-muted" />
-          <div className="mt-4 h-4 w-full rounded-full bg-muted" />
-          <div className="mt-2 h-4 w-3/4 rounded-full bg-muted" />
+      <Card className="w-full max-w-md rounded-2xl border-border/80 p-8 shadow-[0_24px_80px_-44px_color-mix(in_oklab,var(--primary)_40%,transparent)]">
+        <div>
+          <Skeleton className="h-3 w-36" />
+          <Skeleton className="mt-5 h-10 w-4/5 rounded-lg" />
+          <Skeleton className="mt-4 h-4 w-full rounded-full" />
+          <Skeleton className="mt-2 h-4 w-3/4 rounded-full" />
         </div>
         <p className="mt-8 font-mono text-xs uppercase tracking-[0.14em] text-muted-foreground">
           {message}
         </p>
-      </div>
+      </Card>
     </main>
-  );
-}
-
-export function InlineError({ message }: { message: string }) {
-  return (
-    <div
-      role="alert"
-      aria-live="polite"
-      className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive"
-    >
-      {message}
-    </div>
   );
 }

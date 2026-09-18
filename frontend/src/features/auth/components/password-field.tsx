@@ -4,6 +4,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import type { InputHTMLAttributes } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
 
 type PasswordFieldProps = InputHTMLAttributes<HTMLInputElement> & {
@@ -26,7 +27,7 @@ export function PasswordField({
   return (
     <FormField id={id} label={label} hint={hint} error={error}>
       <div className="relative">
-        <input
+        <Input
           {...props}
           id={id}
           type={visible ? "text" : "password"}

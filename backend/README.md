@@ -77,7 +77,16 @@ The initial service exposes:
 - `GET /api/v1` for versioned API metadata.
 - `/api/v1/auth/*` for local-owner setup, login, logout, current-user, CSRF,
   and password-change operations.
-- `GET /mcp` as an explicit not-yet-configured MCP transport placeholder.
+- `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
+- `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
+  task operations to agents. MCP clients send the existing session token as a
+  bearer token in the `Authorization` header.
+
+Tasks use the statuses `backlog`, `todo`, `in_progress`, `done`, and `canceled`
+and the priorities `none`, `low`, `medium`, and `high`. Task tags are supplied
+inline, normalized per owner, and replaced atomically on update. `start_at` and
+`due_at` must be timezone-aware ISO datetimes. Deletes are soft deletes and
+excluded from normal task reads.
 
 ## Verification
 
@@ -88,10 +97,10 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-The backend now has a persistent SQLite storage foundation, versioned auth
-schema, and local-owner authentication. Task, knowledge, finance, self-hosting,
-and MCP domain tools remain deferred until their own vertical slices are
-designed. To roll back the application after the additive auth migration,
-deploy the previous application while leaving the new tables in place. Only
-run `uv run alembic downgrade -1` against a backed-up local database when
-intentionally removing the auth schema.
+The backend now has a persistent SQLite storage foundation, versioned auth and
+task schemas, local-owner authentication, and the first shared REST/MCP domain
+slice. Knowledge, finance, and self-hosting packaging remain deferred. To roll
+back the application after the additive task migration, deploy the previous
+application while leaving the new tables in place. Only run
+`uv run alembic downgrade 0001_auth_foundation` against a backed-up local
+database when intentionally removing the task schema.

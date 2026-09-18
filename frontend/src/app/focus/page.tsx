@@ -1,6 +1,4 @@
-import {
-  WorkspaceModuleRoute,
-} from "@/features/workspace/components/workspace-shell";
+import { TasksRoute } from "@/features/tasks/components/tasks-page";
 
 export const metadata = {
   title: "Focus · Cortex",
@@ -8,5 +6,5 @@ export const metadata = {
 };
 
 export default function FocusPage() {
-  return <WorkspaceModuleRoute moduleKey="focus" />;
+  return <TasksRoute />;
 }

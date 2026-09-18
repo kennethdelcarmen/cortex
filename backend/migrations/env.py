@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from cortex_backend.auth.models import Base
 from cortex_backend.config import Settings
+from cortex_backend.tasks import models as _task_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

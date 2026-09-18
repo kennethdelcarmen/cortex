@@ -1,0 +1,622 @@
+"""Owner-scoped task use cases over the shared database storage seam."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..storage import DatabaseStorage
+from .errors import (
+    InvalidCursorError,
+    InvalidTaskDatesError,
+    InvalidTaskDateTimezoneError,
+    InvalidTaskQueryError,
+    InvalidTaskReorderError,
+    InvalidTaskTagError,
+    TaskNotFoundError,
+)
+from .models import Tag, Task, TaskTag
+from .schemas import (
+    TaskCreateRequest,
+    TaskListOrder,
+    TaskPriority,
+    TaskReorderRequest,
+    TaskStatus,
+    TaskUpdateRequest,
+)
+
+
+@dataclass(frozen=True)
+class TaskRecord:
+    id: str
+    title: str
+    description: str | None
+    status: TaskStatus
+    priority: TaskPriority
+    position: int
+    start_at: datetime | None
+    due_at: datetime | None
+    tags: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class TaskListFilters:
+    statuses: tuple[TaskStatus, ...] = ()
+    priorities: tuple[TaskPriority, ...] = ()
+    tags: tuple[str, ...] = ()
+    due_from: datetime | None = None
+    due_to: datetime | None = None
+    limit: int = 50
+    cursor: str | None = None
+    order: TaskListOrder = TaskListOrder.DUE
+
+
+@dataclass(frozen=True)
+class TaskPage:
+    items: list[TaskRecord]
+    next_cursor: str | None
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _aware_or_error(value: datetime | None) -> datetime | None:
+    if value is not None and value.utcoffset() is None:
+        raise InvalidTaskDateTimezoneError()
+    return value
+
+
+def _normalized_input_datetime(value: datetime | None) -> datetime | None:
+    value = _aware_or_error(value)
+    return value.astimezone(UTC) if value is not None else None
+
+
+def _validate_date_range(start_at: datetime | None, due_at: datetime | None) -> None:
+    start_at = _aware_or_error(start_at)
+    due_at = _aware_or_error(due_at)
+    if start_at is not None and due_at is not None and start_at > due_at:
+        raise InvalidTaskDatesError()
+
+
+def normalize_tag_name(value: str) -> str:
+    normalized = value.strip().casefold()
+    if not normalized or len(normalized) > 64:
+        raise InvalidTaskTagError()
+    return normalized
+
+
+def normalize_tag_names(values: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    normalized: dict[str, None] = {}
+    for value in values:
+        name = normalize_tag_name(value)
+        normalized[name] = None
+    if len(normalized) > 20:
+        raise InvalidTaskTagError()
+    return tuple(normalized)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _required_utc(value: datetime) -> datetime:
+    normalized = _as_utc(value)
+    assert normalized is not None
+    return normalized
+
+
+def _record(task: Task, tags: list[str]) -> TaskRecord:
+    return TaskRecord(
+        id=task.id,
+        title=task.title,
+        description=task.description,
+        status=TaskStatus(task.status),
+        priority=TaskPriority(task.priority),
+        position=task.position,
+        start_at=_as_utc(task.start_at),
+        due_at=_as_utc(task.due_at),
+        tags=tags,
+        created_at=_required_utc(task.created_at),
+        updated_at=_required_utc(task.updated_at),
+    )
+
+
+async def _tags_for_tasks(db: AsyncSession, task_ids: list[str]) -> dict[str, list[str]]:
+    if not task_ids:
+        return {}
+    result = await db.execute(
+        select(TaskTag.task_id, Tag.name)
+        .join(Tag, Tag.id == TaskTag.tag_id)
+        .where(TaskTag.task_id.in_(task_ids))
+        .order_by(Tag.name.asc())
+    )
+    tags: dict[str, list[str]] = defaultdict(list)
+    for task_id, name in result.all():
+        tags[task_id].append(name)
+    return tags
+
+
+async def _replace_tags(
+    db: AsyncSession,
+    task_id: str,
+    user_id: str,
+    tag_names: list[str] | tuple[str, ...] | None,
+) -> None:
+    normalized_names = normalize_tag_names(tag_names)
+    await db.execute(delete(TaskTag).where(TaskTag.task_id == task_id))
+    for name in normalized_names:
+        tag = await db.scalar(select(Tag).where(Tag.user_id == user_id, Tag.name == name).limit(1))
+        if tag is None:
+            tag = Tag(id=str(uuid4()), user_id=user_id, name=name, created_at=_utc_now())
+            db.add(tag)
+            await db.flush()
+        db.add(TaskTag(task_id=task_id, tag_id=tag.id))
+    await db.flush()
+
+
+async def _get_task_row(db: AsyncSession, user_id: str, task_id: str) -> Task:
+    task = await db.scalar(
+        select(Task)
+        .where(
+            Task.id == task_id,
+            Task.user_id == user_id,
+            Task.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if task is None:
+        raise TaskNotFoundError()
+    return task
+
+
+def _status_rank_expression():
+    return case(
+        (Task.status == TaskStatus.BACKLOG.value, 0),
+        (Task.status == TaskStatus.TODO.value, 1),
+        (Task.status == TaskStatus.IN_PROGRESS.value, 2),
+        (Task.status == TaskStatus.DONE.value, 3),
+        (Task.status == TaskStatus.CANCELED.value, 4),
+        else_=5,
+    )
+
+
+async def _next_position(db: AsyncSession, user_id: str, status: str) -> int:
+    maximum = await db.scalar(
+        select(func.max(Task.position)).where(
+            Task.user_id == user_id,
+            Task.status == status,
+            Task.deleted_at.is_(None),
+        )
+    )
+    return int(maximum) + 1 if maximum is not None else 0
+
+
+async def _remove_from_column(db: AsyncSession, task: Task) -> None:
+    old_position = task.position
+    task.position = -1
+    await db.flush()
+    await db.execute(
+        update(Task)
+        .where(
+            Task.user_id == task.user_id,
+            Task.status == task.status,
+            Task.deleted_at.is_(None),
+            Task.position > old_position,
+        )
+        .values(position=Task.position - 1)
+    )
+
+
+async def _move_to_column_end(db: AsyncSession, task: Task, status: str) -> None:
+    if task.status != status:
+        await _remove_from_column(db, task)
+        task.status = status
+        task.position = await _next_position(db, task.user_id, status)
+
+
+async def create_task(
+    storage: DatabaseStorage,
+    user_id: str,
+    payload: TaskCreateRequest,
+) -> TaskRecord:
+    """Create an owner-scoped task and its normalized tag memberships."""
+
+    start_at = _normalized_input_datetime(payload.start_at)
+    due_at = _normalized_input_datetime(payload.due_at)
+    _validate_date_range(start_at, due_at)
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            task = Task(
+                id=str(uuid4()),
+                user_id=user_id,
+                title=payload.title,
+                description=payload.description,
+                status=payload.status.value,
+                priority=payload.priority.value,
+                position=await _next_position(db, user_id, payload.status.value),
+                start_at=start_at,
+                due_at=due_at,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(task)
+            await db.flush()
+            await _replace_tags(db, task.id, user_id, payload.tags)
+            tags = await _tags_for_tasks(db, [task.id])
+            return _record(task, tags.get(task.id, []))
+
+
+async def get_task(storage: DatabaseStorage, user_id: str, task_id: str) -> TaskRecord:
+    """Return one non-deleted task owned by the authenticated user."""
+
+    async with storage.session() as db:
+        task = await _get_task_row(db, user_id, task_id)
+        tags = await _tags_for_tasks(db, [task.id])
+        return _record(task, tags.get(task.id, []))
+
+
+def _filter_fingerprint(filters: TaskListFilters) -> str:
+    payload = {
+        "statuses": [status.value for status in filters.statuses],
+        "priorities": [priority.value for priority in filters.priorities],
+        "tags": list(normalize_tag_names(filters.tags)),
+        "due_from": filters.due_from.isoformat() if filters.due_from else None,
+        "due_to": filters.due_to.isoformat() if filters.due_to else None,
+    }
+    if filters.order != TaskListOrder.DUE:
+        payload["order"] = filters.order.value
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _encode_cursor(task: Task, fingerprint: str) -> str:
+    payload = {
+        "v": 1,
+        "f": fingerprint,
+        "due_at": _required_utc(task.due_at).isoformat() if task.due_at else None,
+        "created_at": _required_utc(task.created_at).isoformat(),
+        "id": task.id,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _encode_board_cursor(task: Task, fingerprint: str) -> str:
+    payload = {
+        "v": 2,
+        "f": fingerprint,
+        "status": task.status,
+        "position": task.position,
+        "created_at": _required_utc(task.created_at).isoformat(),
+        "id": task.id,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime | None, datetime, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        if payload.get("v") != 1 or payload.get("f") != fingerprint:
+            raise ValueError
+        due_at = payload.get("due_at")
+        created_at = datetime.fromisoformat(payload["created_at"])
+        task_id = payload["id"]
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError
+        if due_at is not None:
+            due_at = datetime.fromisoformat(due_at)
+        if created_at.tzinfo is None or (due_at is not None and due_at.tzinfo is None):
+            raise ValueError
+        return due_at, created_at, task_id
+    except (binascii.Error, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        raise InvalidCursorError() from None
+
+
+def _decode_board_cursor(cursor: str, fingerprint: str) -> tuple[str, int, datetime, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        if payload.get("v") != 2 or payload.get("f") != fingerprint:
+            raise ValueError
+        status = payload["status"]
+        position = payload["position"]
+        created_at = datetime.fromisoformat(payload["created_at"])
+        task_id = payload["id"]
+        if status not in {status.value for status in TaskStatus}:
+            raise ValueError
+        if not isinstance(position, int) or position < 0:
+            raise ValueError
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError
+        if created_at.tzinfo is None:
+            raise ValueError
+        return status, position, created_at, task_id
+    except (binascii.Error, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        raise InvalidCursorError() from None
+
+
+async def list_tasks(
+    storage: DatabaseStorage,
+    user_id: str,
+    filters: TaskListFilters,
+) -> TaskPage:
+    """Return a bounded, filtered page in due-date or board order."""
+
+    if not 1 <= filters.limit <= 100:
+        raise InvalidTaskQueryError()
+    due_from = _normalized_input_datetime(filters.due_from)
+    due_to = _normalized_input_datetime(filters.due_to)
+    if due_from is not None and due_to is not None and due_from > due_to:
+        raise InvalidTaskDatesError()
+
+    normalized_tags = normalize_tag_names(filters.tags)
+    normalized_filters = TaskListFilters(
+        statuses=filters.statuses,
+        priorities=filters.priorities,
+        tags=normalized_tags,
+        due_from=due_from,
+        due_to=due_to,
+        limit=filters.limit,
+        cursor=filters.cursor,
+        order=filters.order,
+    )
+    fingerprint = _filter_fingerprint(normalized_filters)
+    order_null = case((Task.due_at.is_(None), 1), else_=0)
+
+    async with storage.session() as db:
+        stmt = select(Task).where(Task.user_id == user_id, Task.deleted_at.is_(None))
+        if normalized_filters.statuses:
+            stmt = stmt.where(
+                Task.status.in_([status.value for status in normalized_filters.statuses])
+            )
+        if normalized_filters.priorities:
+            stmt = stmt.where(
+                Task.priority.in_([priority.value for priority in normalized_filters.priorities])
+            )
+        if normalized_filters.due_from is not None:
+            stmt = stmt.where(Task.due_at >= normalized_filters.due_from)
+        if normalized_filters.due_to is not None:
+            stmt = stmt.where(Task.due_at < normalized_filters.due_to)
+        for tag_name in normalized_filters.tags:
+            stmt = stmt.where(
+                select(TaskTag.task_id)
+                .join(Tag, Tag.id == TaskTag.tag_id)
+                .where(
+                    TaskTag.task_id == Task.id,
+                    Tag.user_id == user_id,
+                    Tag.name == tag_name,
+                )
+                .exists()
+            )
+
+        if normalized_filters.order == TaskListOrder.BOARD:
+            status_rank = _status_rank_expression()
+            if normalized_filters.cursor:
+                cursor_status, cursor_position, cursor_created, cursor_id = _decode_board_cursor(
+                    normalized_filters.cursor,
+                    fingerprint,
+                )
+                cursor_rank = {status.value: index for index, status in enumerate(TaskStatus)}[
+                    cursor_status
+                ]
+                stmt = stmt.where(
+                    or_(
+                        status_rank > cursor_rank,
+                        and_(
+                            status_rank == cursor_rank,
+                            Task.position > cursor_position,
+                        ),
+                        and_(
+                            status_rank == cursor_rank,
+                            Task.position == cursor_position,
+                            Task.created_at < cursor_created,
+                        ),
+                        and_(
+                            status_rank == cursor_rank,
+                            Task.position == cursor_position,
+                            Task.created_at == cursor_created,
+                            Task.id > cursor_id,
+                        ),
+                    )
+                )
+            stmt = stmt.order_by(
+                status_rank.asc(),
+                Task.position.asc(),
+                Task.created_at.desc(),
+                Task.id.asc(),
+            )
+        else:
+            if normalized_filters.cursor:
+                cursor_due, cursor_created, cursor_id = _decode_cursor(
+                    normalized_filters.cursor,
+                    fingerprint,
+                )
+                if cursor_due is None:
+                    stmt = stmt.where(
+                        or_(
+                            and_(
+                                order_null == 1,
+                                Task.created_at < cursor_created,
+                            ),
+                            and_(
+                                order_null == 1,
+                                Task.created_at == cursor_created,
+                                Task.id > cursor_id,
+                            ),
+                        )
+                    )
+                else:
+                    stmt = stmt.where(
+                        or_(
+                            order_null > 0,
+                            and_(
+                                order_null == 0,
+                                Task.due_at > cursor_due,
+                            ),
+                            and_(
+                                order_null == 0,
+                                Task.due_at == cursor_due,
+                                Task.created_at < cursor_created,
+                            ),
+                            and_(
+                                order_null == 0,
+                                Task.due_at == cursor_due,
+                                Task.created_at == cursor_created,
+                                Task.id > cursor_id,
+                            ),
+                        )
+                    )
+
+            stmt = stmt.order_by(
+                order_null.asc(),
+                Task.due_at.asc(),
+                Task.created_at.desc(),
+                Task.id.asc(),
+            )
+        rows = list((await db.scalars(stmt.limit(normalized_filters.limit + 1))).all())
+        page_rows = rows[: normalized_filters.limit]
+        tags = await _tags_for_tasks(db, [task.id for task in page_rows])
+        if len(rows) > normalized_filters.limit:
+            next_cursor = (
+                _encode_board_cursor(page_rows[-1], fingerprint)
+                if normalized_filters.order == TaskListOrder.BOARD
+                else _encode_cursor(page_rows[-1], fingerprint)
+            )
+        else:
+            next_cursor = None
+        return TaskPage(
+            items=[_record(task, tags.get(task.id, [])) for task in page_rows],
+            next_cursor=next_cursor,
+        )
+
+
+async def update_task(
+    storage: DatabaseStorage,
+    user_id: str,
+    task_id: str,
+    payload: TaskUpdateRequest,
+) -> TaskRecord:
+    """Apply a partial update and optionally replace tag membership."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id)
+            values = payload.model_dump(exclude_unset=True)
+            start_at = values.get("start_at", _as_utc(task.start_at))
+            due_at = values.get("due_at", _as_utc(task.due_at))
+            if "start_at" in values:
+                start_at = _normalized_input_datetime(start_at)
+            if "due_at" in values:
+                due_at = _normalized_input_datetime(due_at)
+            _validate_date_range(start_at, due_at)
+
+            for field in ("title", "description", "start_at", "due_at"):
+                if field in values:
+                    value = values[field]
+                    if field in {"start_at", "due_at"}:
+                        value = _normalized_input_datetime(value)
+                    setattr(task, field, value)
+            if "status" in values:
+                if values["status"] is None:
+                    raise ValueError("status cannot be null")
+                await _move_to_column_end(db, task, values["status"].value)
+            if "priority" in values:
+                if values["priority"] is None:
+                    raise ValueError("priority cannot be null")
+                task.priority = values["priority"].value
+            if "tags" in values:
+                await _replace_tags(db, task.id, user_id, values["tags"])
+            task.updated_at = _utc_now()
+            await db.flush()
+            tags = await _tags_for_tasks(db, [task.id])
+            return _record(task, tags.get(task.id, []))
+
+
+async def reorder_task(
+    storage: DatabaseStorage,
+    user_id: str,
+    task_id: str,
+    payload: TaskReorderRequest,
+) -> TaskRecord:
+    """Move a task to a status column and place it before an optional sibling."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id)
+            target_status = payload.status.value
+
+            if payload.before_task_id == task.id:
+                raise InvalidTaskReorderError()
+
+            await _remove_from_column(db, task)
+
+            before_task = None
+            if payload.before_task_id is not None:
+                before_task = await _get_task_row(db, user_id, payload.before_task_id)
+                if before_task.status != target_status:
+                    raise InvalidTaskReorderError()
+
+            if before_task is None:
+                position = await _next_position(db, user_id, target_status)
+            else:
+                position = before_task.position
+                await db.execute(
+                    update(Task)
+                    .where(
+                        Task.user_id == user_id,
+                        Task.status == target_status,
+                        Task.deleted_at.is_(None),
+                        Task.position >= position,
+                    )
+                    .values(position=Task.position + 1)
+                )
+
+            task.status = target_status
+            task.position = position
+            task.updated_at = _utc_now()
+            await db.flush()
+            tags = await _tags_for_tasks(db, [task.id])
+            return _record(task, tags.get(task.id, []))
+
+
+async def delete_task(storage: DatabaseStorage, user_id: str, task_id: str) -> None:
+    """Soft-delete one owner-scoped task."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id)
+            now = _utc_now()
+            task.deleted_at = now
+            task.updated_at = now
+            await db.flush()
+            await db.execute(
+                update(Task)
+                .where(
+                    Task.user_id == user_id,
+                    Task.status == task.status,
+                    Task.deleted_at.is_(None),
+                    Task.position > task.position,
+                )
+                .values(position=Task.position - 1)
+            )

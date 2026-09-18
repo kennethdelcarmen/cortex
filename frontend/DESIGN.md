@@ -81,3 +81,22 @@ user's next action, supporting context, and navigation.
 Use semantic landmarks, heading hierarchy, native controls, explicit labels,
 descriptive link text, and status announcements for asynchronous changes.
 Contrast must remain readable in both themes and at increased text scale.
+
+## Component governance
+
+Use shadcn/ui as the frontend's reusable component library. The configured
+`base-nova` style and the semantic Cortex tokens above remain the source of
+truth for appearance; shadcn components provide the interaction primitives and
+their in-repository implementation.
+
+- Feature and route code imports reusable UI from `@/components/ui/*`.
+- Direct `@base-ui/react` imports are implementation details of generated
+  shadcn components and must not be added to `src/app` or `src/features`.
+- Add new primitives with the configured shadcn CLI so generated components,
+  dependencies, and aliases stay aligned with `components.json`.
+- Compose product-specific patterns, such as task rows and workspace rails,
+  in their feature folders from shadcn primitives. Do not turn every layout
+  wrapper or semantic navigation link into a generic component.
+- Preserve native semantics where shadcn has no direct replacement, such as
+  `date` and `datetime-local` input types, by rendering them through the
+  shadcn `Input` component.

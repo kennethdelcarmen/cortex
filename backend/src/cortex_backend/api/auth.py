@@ -9,7 +9,6 @@ from ..auth.errors import AuthError
 from ..auth.security import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
-    validate_csrf,
     validate_request_origin,
 )
 from ..auth.service import (
@@ -26,7 +25,13 @@ from ..auth.service import (
 from ..auth.throttling import LoginThrottle
 from ..config import Settings
 from ..storage import DatabaseStorage
-from .dependencies import get_current_auth, get_database_storage, get_login_throttle, get_settings
+from .dependencies import (
+    get_current_auth,
+    get_database_storage,
+    get_login_throttle,
+    get_settings,
+    require_csrf_auth,
+)
 from .schemas import (
     ChangePasswordRequest,
     CsrfResponse,
@@ -89,19 +94,6 @@ def _validate_public_origin(request: Request, settings: Settings) -> None:
         validate_request_origin(request, settings, required=False)
     except AuthError as exc:
         _raise_http(exc)
-
-
-async def _require_csrf_auth(
-    request: Request,
-    settings: Annotated[Settings, Depends(get_settings)],
-    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
-) -> CurrentAuth:
-    try:
-        validate_request_origin(request, settings, required=True)
-        validate_csrf(request, auth.csrf_token_hash)
-    except AuthError as exc:
-        _raise_http(exc)
-    return auth
 
 
 @router.post("/setup/verify", status_code=status.HTTP_204_NO_CONTENT)
@@ -202,7 +194,7 @@ async def logout_route(
     response: Response,
     settings: Annotated[Settings, Depends(get_settings)],
     storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
-    auth: Annotated[CurrentAuth, Depends(_require_csrf_auth)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
 ) -> None:
     """Revoke the current session and clear both browser cookies."""
 
@@ -217,7 +209,7 @@ async def password_change(
     payload: ChangePasswordRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
-    auth: Annotated[CurrentAuth, Depends(_require_csrf_auth)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
 ) -> UserResponse:
     """Change the password and rotate every session."""
 

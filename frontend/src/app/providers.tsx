@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { FeedbackProvider } from "@/components/feedback";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -26,7 +27,9 @@ export function Providers({ children }: { children: ReactNode }) {
       enableSystem
       disableTransitionOnChange
     >
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        <FeedbackProvider>{children}</FeedbackProvider>
+      </QueryClientProvider>
     </ThemeProvider>
   );
 }

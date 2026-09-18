@@ -2,12 +2,9 @@
 
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
-import { Button, buttonVariants } from "@/components/ui/button";
-import {
-  AuthLayout,
-  AuthLoading,
-  InlineError,
-} from "@/features/auth/components/auth-layout";
+import { buttonVariants } from "@/components/ui/button";
+import { BlockingErrorDialog } from "@/components/feedback";
+import { AuthLayout, AuthLoading } from "@/features/auth/components/auth-layout";
 import { describeAuthError } from "@/features/auth/api";
 import { useCurrentUser } from "@/features/auth/hooks";
 import { WorkspaceHome } from "@/features/workspace/components/workspace-shell";
@@ -52,21 +49,20 @@ export default function Home() {
 
   if (currentUser.isError) {
     return (
-      <AuthLayout
-        title="Cortex is taking a moment."
-        description="The local service did not answer the workspace check."
-      >
-        <div className="space-y-5">
-          <InlineError message={describeAuthError(currentUser.error)} />
-          <Button
-            type="button"
-            className="w-full"
-            onClick={() => currentUser.refetch()}
-          >
-            Try again
-          </Button>
-        </div>
-      </AuthLayout>
+      <>
+        <AuthChoice />
+        <BlockingErrorDialog
+          open
+          title="Cortex is taking a moment."
+          description={describeAuthError(currentUser.error)}
+          action={{
+            label: "Try again",
+            onClick: () => void currentUser.refetch(),
+            pending: currentUser.isFetching,
+            pendingLabel: "Checking…",
+          }}
+        />
+      </>
     );
   }
 

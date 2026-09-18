@@ -4,12 +4,15 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, Clock3, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import {
   AuthLayout,
   AuthLoading,
-  InlineError,
 } from "@/features/auth/components/auth-layout";
 import { authQueryKey, describeAuthError, logout } from "@/features/auth/api";
 import { useCurrentUser } from "@/features/auth/hooks";
@@ -135,8 +138,9 @@ function WorkspaceSidebar({
           </div>
         </nav>
 
-        <div className="mt-auto border-t border-border/70 pt-5">
-          <div className="mb-5 rounded-lg border border-border/70 bg-card/50 px-3 py-3">
+        <Separator className="mt-auto mb-5" />
+        <div>
+          <Card size="sm" className="mb-5 border-border/70 bg-card/50 p-3 ring-0">
             <div className="flex items-center gap-2">
               <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
               <span className="font-mono text-[0.65rem] font-medium uppercase tracking-[0.15em] text-primary">
@@ -146,7 +150,7 @@ function WorkspaceSidebar({
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
               Your data stays close to the service you run.
             </p>
-          </div>
+          </Card>
           <div className="space-y-3">
             <span className="block truncate font-mono text-[0.65rem] text-muted-foreground">
               {email}
@@ -204,18 +208,20 @@ function MobileWorkspaceNav() {
 
 export function WorkspaceShell({ email, children }: WorkspaceShellProps) {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<string>();
+  const feedback = useFeedback();
   const mutation = useMutation({
     mutationFn: logout,
     onSuccess: () => {
       queryClient.setQueryData(authQueryKey, null);
-      setError(undefined);
     },
-    onError: (reason) => setError(describeAuthError(reason)),
+    onError: (reason) =>
+      feedback.error({
+        title: "Sign out failed",
+        description: describeAuthError(reason),
+      }),
   });
 
   const signOut = () => {
-    setError(undefined);
     mutation.mutate();
   };
 
@@ -233,11 +239,6 @@ export function WorkspaceShell({ email, children }: WorkspaceShellProps) {
             onSignOut={signOut}
           />
           <main className="mx-auto w-full max-w-[1240px] px-5 pb-28 pt-7 sm:px-8 sm:pt-10 lg:px-10 lg:pb-12 lg:pt-12">
-            {error ? (
-              <div className="mb-8 max-w-2xl">
-                <InlineError message={error} />
-              </div>
-            ) : null}
             {children}
           </main>
         </div>
@@ -269,15 +270,15 @@ function CurrentDateLabel() {
 
 function HomeDashboard() {
   return (
-    <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-16">
+    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-14">
       <div className="min-w-0">
-        <header className="flex flex-col gap-7 border-b border-border/70 pb-9 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
+        <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-8">
           <div className="max-w-2xl">
             <CurrentDateLabel />
-            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.055em] text-foreground sm:text-6xl">
+            <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-foreground sm:text-4xl">
               Today, in reach.
             </h1>
-            <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
+            <p className="mt-3 max-w-xl text-base leading-7 text-muted-foreground sm:text-base">
               Keep the next meaningful action close, with the rest of your life nearby.
             </p>
           </div>
@@ -286,7 +287,7 @@ function HomeDashboard() {
           </div>
         </header>
 
-        <section aria-labelledby="focus-sequence-title" className="mt-10 sm:mt-12">
+        <section aria-labelledby="focus-sequence-title" className="mt-7 sm:mt-8">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">
@@ -301,7 +302,7 @@ function HomeDashboard() {
             </span>
           </div>
 
-          <div className="relative overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
+          <Card className="relative overflow-hidden rounded-xl border-border/80 p-0 shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
             <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
             <div className="p-6 sm:p-8">
               <div className="flex items-center gap-2 text-primary">
@@ -310,7 +311,7 @@ function HomeDashboard() {
                   Ready for your first move
                 </p>
               </div>
-              <h3 className="mt-5 max-w-lg text-2xl font-medium tracking-[-0.035em] sm:text-3xl">
+              <h3 className="mt-4 max-w-lg text-xl font-medium tracking-[-0.025em] sm:text-2xl">
                 Give today a clear beginning.
               </h3>
               <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
@@ -320,7 +321,7 @@ function HomeDashboard() {
                 Use Add above to shape the day.
               </p>
             </div>
-          </div>
+          </Card>
         </section>
       </div>
 
@@ -365,15 +366,16 @@ function HomeContextRail() {
         </nav>
       </section>
 
-      <section className="mt-10 border-t border-border/70 pt-6">
+      <section className="mt-10">
+        <Separator className="mb-6" />
         <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">
           Workspace
         </p>
         <div className="mt-4 flex items-center gap-2">
           <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
-          <span className="font-mono text-[0.68rem] font-medium uppercase tracking-[0.14em] text-primary">
+          <Badge variant="outline" className="h-auto rounded-full border-primary/30 px-2 py-0.5 font-mono text-[0.68rem] font-medium uppercase tracking-[0.14em] text-primary">
             Local by default
-          </span>
+          </Badge>
         </div>
         <p className="mt-3 text-xs leading-5 text-muted-foreground">
           The visual workspace and agent tools share the same service boundary.
@@ -407,17 +409,25 @@ export function WorkspaceRouteGuard({ children }: { children: ReactNode }) {
 
   if (currentUser.isError) {
     return (
-      <AuthLayout
-        title="Cortex is taking a moment."
-        description="The local service did not answer the workspace check."
-      >
-        <div className="space-y-5">
-          <InlineError message={describeAuthError(currentUser.error)} />
-          <Button type="button" className="w-full" onClick={() => currentUser.refetch()}>
-            Try again
-          </Button>
-        </div>
-      </AuthLayout>
+      <>
+        <AuthLayout
+          title="Cortex is taking a moment."
+          description="The local service did not answer the workspace check."
+        >
+          <div className="h-12" aria-hidden="true" />
+        </AuthLayout>
+        <BlockingErrorDialog
+          open
+          title="Cortex is taking a moment."
+          description={describeAuthError(currentUser.error)}
+          action={{
+            label: "Try again",
+            onClick: () => void currentUser.refetch(),
+            pending: currentUser.isFetching,
+            pendingLabel: "Checking…",
+          }}
+        />
+      </>
     );
   }
 
@@ -449,15 +459,15 @@ export function WorkspaceModulePage({
   return (
     <WorkspaceShell email={email}>
       <div className="max-w-3xl">
-        <header className="flex flex-col gap-7 border-b border-border/70 pb-9 sm:flex-row sm:items-end sm:justify-between sm:gap-10">
+        <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-8">
           <div>
             <p className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary">
               {moduleDefinition.label} / workspace
             </p>
-            <h1 className="mt-4 text-4xl font-semibold tracking-[-0.055em] sm:text-6xl">
+            <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
               {moduleDefinition.label}
             </h1>
-            <p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
+            <p className="mt-3 max-w-xl text-base leading-7 text-muted-foreground sm:text-base">
               {moduleDefinition.description}. A focused place for this part of the life already in motion.
             </p>
           </div>
@@ -466,7 +476,7 @@ export function WorkspaceModulePage({
           </div>
         </header>
 
-        <section className="relative mt-10 overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
+        <Card className="relative mt-7 overflow-hidden rounded-xl border-border/80 p-0 shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
           <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
           <div className="p-6 sm:p-8">
             <div className="flex items-center gap-3">
@@ -477,7 +487,7 @@ export function WorkspaceModulePage({
                 Coming next
               </span>
             </div>
-            <h2 className="mt-6 max-w-2xl text-2xl font-medium tracking-[-0.035em] sm:text-3xl">
+            <h2 className="mt-4 max-w-2xl text-xl font-medium tracking-[-0.025em] sm:text-2xl">
               {moduleDefinition.emptyTitle}
             </h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
@@ -494,7 +504,7 @@ export function WorkspaceModulePage({
               Return to Today <ArrowUpRight data-icon="inline-end" aria-hidden="true" />
             </Link>
           </div>
-        </section>
+        </Card>
       </div>
     </WorkspaceShell>
   );

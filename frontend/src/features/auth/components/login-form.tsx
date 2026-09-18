@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { z } from "zod";
+import { useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { ApiError } from "@/lib/api/client";
 import { authQueryKey, describeAuthError, login } from "../api";
-import { InlineError } from "./auth-layout";
 import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
 import { PasswordField } from "./password-field";
 
@@ -19,6 +22,7 @@ const loginFormSchema = z.object({
 export function LoginForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const feedback = useFeedback();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
@@ -33,7 +37,14 @@ export function LoginForm() {
     },
     onError: (error) => {
       setPassword("");
-      setFormError(describeAuthError(error));
+      if (error instanceof ApiError && error.code === "invalid_credentials") {
+        setFormError(describeAuthError(error));
+      } else {
+        feedback.error({
+          title: "Sign in failed",
+          description: describeAuthError(error),
+        });
+      }
     },
   });
 
@@ -66,9 +77,13 @@ export function LoginForm() {
       }}
       noValidate
     >
-      {formError ? <InlineError message={formError} /> : null}
+      {formError ? (
+        <FieldError id="login-form-error" aria-live="polite">
+          {formError}
+        </FieldError>
+      ) : null}
       <FormField id="login-email" label="Owner email" error={errors.email}>
-        <input
+        <Input
           id="login-email"
           name="email"
           type="email"
