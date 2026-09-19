@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -144,6 +145,7 @@ async def test_task_list_filters_and_cursor_pagination(client: AsyncClient) -> N
         },
         {
             "title": "Soon work",
+            "description": "Review the focus plan.",
             "status": "backlog",
             "priority": "low",
             "due_at": "2027-01-01T09:00:00Z",
@@ -186,6 +188,112 @@ async def test_task_list_filters_and_cursor_pagination(client: AsyncClient) -> N
     invalid_cursor = await client.get("/api/v1/tasks", params={"cursor": "not-a-cursor"})
     assert invalid_cursor.status_code == 400
     assert invalid_cursor.json()["detail"]["code"] == "invalid_task_cursor"
+
+    title_search = await client.get("/api/v1/tasks", params={"search": "later focused"})
+    assert [item["title"] for item in title_search.json()["items"]] == ["Later focused work"]
+
+    tag_search = await client.get("/api/v1/tasks", params={"search": "focus"})
+    assert [item["title"] for item in tag_search.json()["items"]] == [
+        "Soon work",
+        "Later focused work",
+        "Undated focused work",
+    ]
+
+    description_search = await client.get("/api/v1/tasks", params={"search": "review"})
+    assert [item["title"] for item in description_search.json()["items"]] == ["Soon work"]
+
+    search_cursor = await client.get(
+        "/api/v1/tasks",
+        params={"limit": 1},
+    )
+    search_cursor_value = search_cursor.json()["next_cursor"]
+    assert search_cursor_value
+    changed_filter_cursor = await client.get(
+        "/api/v1/tasks",
+        params={"limit": 1, "cursor": search_cursor_value, "search": "work"},
+    )
+    assert changed_filter_cursor.status_code == 400
+    assert changed_filter_cursor.json()["detail"]["code"] == "invalid_task_cursor"
+
+
+async def test_task_summary_counts_views_and_tags(client: AsyncClient) -> None:
+    await setup_owner(client)
+    now = datetime.now(UTC)
+    today_at_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    tomorrow_at_noon = (now + timedelta(days=1)).replace(
+        hour=12,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    payloads = [
+        {
+            "title": "Today high priority",
+            "status": "todo",
+            "priority": "high",
+            "due_at": today_at_noon.isoformat(),
+            "tags": ["work"],
+        },
+        {
+            "title": "Tomorrow work",
+            "status": "backlog",
+            "due_at": tomorrow_at_noon.isoformat(),
+            "tags": ["work"],
+        },
+        {
+            "title": "Yesterday personal",
+            "status": "in_progress",
+            "priority": "high",
+            "due_at": (now - timedelta(days=1)).isoformat(),
+            "tags": ["personal"],
+        },
+        {
+            "title": "Done today admin",
+            "status": "done",
+            "priority": "high",
+            "due_at": today_at_noon.isoformat(),
+            "tags": ["admin"],
+        },
+        {
+            "title": "Canceled tomorrow",
+            "status": "canceled",
+            "due_at": tomorrow_at_noon.isoformat(),
+            "tags": ["admin"],
+        },
+    ]
+    created_ids: list[str] = []
+    for payload in payloads:
+        response = await create_task(client, payload)
+        assert response.status_code == 201
+        created_ids.append(response.json()["id"])
+
+    deleted = await client.delete(
+        f"/api/v1/tasks/{created_ids[-1]}",
+        headers=await csrf_headers(client),
+    )
+    assert deleted.status_code == 204
+
+    summary = await client.get("/api/v1/tasks/summary", params={"timezone": "UTC"})
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "all": 4,
+        "today": 1,
+        "upcoming": 1,
+        "overdue": 1,
+        "high_priority": 2,
+        "tags": [
+            {"name": "admin", "count": 1},
+            {"name": "personal", "count": 1},
+            {"name": "work", "count": 2},
+        ],
+    }
+
+    invalid_timezone = await client.get(
+        "/api/v1/tasks/summary",
+        params={"timezone": "Not/A_Timezone"},
+    )
+    assert invalid_timezone.status_code == 422
+    assert invalid_timezone.json()["detail"]["code"] == "invalid_task_summary_timezone"
 
 
 async def test_task_date_validation_has_stable_error(client: AsyncClient) -> None:
@@ -274,3 +382,35 @@ async def test_mcp_task_tool_uses_the_shared_service(tmp_path, monkeypatch) -> N
 
             rest_list = await test_client.get("/api/v1/tasks")
             assert [item["title"] for item in rest_list.json()["items"]] == ["Captured by MCP"]
+
+            searched = await test_client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_tasks",
+                        "arguments": {"search": "captured"},
+                    },
+                },
+            )
+            assert searched.status_code == 200
+            assert "Captured by MCP" in searched.text
+
+            summary = await test_client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "get_task_summary",
+                        "arguments": {"timezone": "UTC"},
+                    },
+                },
+            )
+            assert summary.status_code == 200
+            assert '"all":1' in summary.text.replace(" ", "")

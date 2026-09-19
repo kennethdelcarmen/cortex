@@ -31,16 +31,32 @@ const taskListResponseSchema = z.object({
   next_cursor: z.string().nullable(),
 });
 
+const taskSummaryResponseSchema = z.object({
+  all: z.number().int().nonnegative(),
+  today: z.number().int().nonnegative(),
+  upcoming: z.number().int().nonnegative(),
+  overdue: z.number().int().nonnegative(),
+  high_priority: z.number().int().nonnegative(),
+  tags: z.array(
+    z.object({
+      name: z.string().min(1),
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+});
+
 export type Task = z.infer<typeof taskSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type TaskListOrder = z.infer<typeof taskListOrderSchema>;
 export type TaskListPage = z.infer<typeof taskListResponseSchema>;
+export type TaskSummary = z.infer<typeof taskSummaryResponseSchema>;
 
 export type TaskListFilters = {
   statuses: TaskStatus[];
   priorities: TaskPriority[];
   tags: string[];
+  search?: string;
   dueFrom?: string;
   dueTo?: string;
 };
@@ -59,6 +75,7 @@ export type TaskEditableField = keyof TaskWriteInput;
 export type TaskUpdateInput = Partial<TaskWriteInput>;
 
 export const taskQueryKey = ["tasks"] as const;
+export const taskSummaryQueryKey = ["task-summary"] as const;
 
 function appendValues(params: URLSearchParams, key: string, values: string[]) {
   for (const value of values) {
@@ -75,6 +92,10 @@ function buildTaskListPath(
   appendValues(params, "status", filters.statuses);
   appendValues(params, "priority", filters.priorities);
   appendValues(params, "tag", filters.tags);
+
+  if (filters.search) {
+    params.set("search", filters.search);
+  }
 
   if (filters.dueFrom) {
     params.set("due_from", filters.dueFrom);
@@ -103,6 +124,16 @@ export function listTasks(
     buildTaskListPath(filters, cursor, order),
     {},
     taskListResponseSchema,
+  );
+}
+
+export function getTaskSummary(timezone: string) {
+  const params = new URLSearchParams({ timezone });
+
+  return apiFetch(
+    `/api/v1/tasks/summary?${params.toString()}`,
+    {},
+    taskSummaryResponseSchema,
   );
 }
 

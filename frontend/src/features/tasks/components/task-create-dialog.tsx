@@ -13,6 +13,7 @@ import {
   adjustDueDateForStart,
   localDateTimePartsToIso,
   currentLocalDateInput,
+  dueDateTimeAfterStart,
   parseTagInput,
   priorityOption,
   statusOption,
@@ -76,7 +77,7 @@ export function TaskCreateDialog({
     setValues((current) => ({
       ...current,
       startAt: value,
-      dueAt: adjustDueDateForStart(value, current.dueAt),
+      dueAt: dueDateTimeAfterStart(value) ?? adjustDueDateForStart(value, current.dueAt),
     }));
     setFormError(undefined);
   }

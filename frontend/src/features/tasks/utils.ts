@@ -177,6 +177,23 @@ export function adjustDueDateForStart(
   return { ...dueAt, date: startAt.date };
 }
 
+export function dueDateTimeAfterStart(startAt: TaskDateTimeValue, minutes = 30) {
+  if (!startAt.date || !startAt.time) {
+    return undefined;
+  }
+
+  const startIso = localDateTimePartsToIso(startAt);
+
+  if (!startIso) {
+    return undefined;
+  }
+
+  const due = new Date(startIso);
+  due.setMinutes(due.getMinutes() + minutes);
+
+  return toLocalDateTimeParts(due.toISOString());
+}
+
 export function taskDateTimeError(value: TaskDateTimeValue) {
   if (!value.date) {
     if (value.time) {

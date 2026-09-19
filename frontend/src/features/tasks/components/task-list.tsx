@@ -253,7 +253,7 @@ function TaskRow({
               <TaskOptionValue option={status} />
             </SelectValue>
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent onClick={(event) => event.stopPropagation()}>
             {TASK_STATUSES.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 <TaskOptionValue option={option} />
@@ -276,7 +276,7 @@ function TaskRow({
               <TaskOptionValue option={priority} />
             </SelectValue>
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent onClick={(event) => event.stopPropagation()}>
             {TASK_PRIORITIES.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 <TaskOptionValue option={option} />

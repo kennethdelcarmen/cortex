@@ -8,6 +8,7 @@ import { z } from "zod";
 import { useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
+import { useActivityLogger } from "@/features/activity/hooks";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
 import { authQueryKey, describeAuthError, login } from "../api";
@@ -23,6 +24,7 @@ export function LoginForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const feedback = useFeedback();
+  const logActivity = useActivityLogger();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
@@ -30,7 +32,8 @@ export function LoginForm() {
 
   const mutation = useMutation({
     mutationFn: login,
-    onSuccess: (user) => {
+    onSuccess: async (user) => {
+      await logActivity({ event_type: "auth.logged_in" });
       queryClient.setQueryData(authQueryKey, user);
       setPassword("");
       router.replace("/");

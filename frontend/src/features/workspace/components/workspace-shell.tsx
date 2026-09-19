@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { useActivityLogger } from "@/features/activity/hooks";
 import {
   AuthLayout,
   AuthLoading,
@@ -18,6 +19,7 @@ import { authQueryKey, describeAuthError, logout } from "@/features/auth/api";
 import { useCurrentUser } from "@/features/auth/hooks";
 import { cn } from "@/lib/utils";
 import { CaptureMenu } from "./capture-menu";
+import { ActivityFeed } from "@/features/activity/components/activity-feed";
 import {
   moduleDefinitions,
   type WorkspaceModule,
@@ -28,6 +30,7 @@ import {
 type WorkspaceShellProps = {
   email: string;
   children: ReactNode;
+  sidebarContent?: ReactNode;
 };
 
 function isActiveNavigationItem(pathname: string | null, item: WorkspaceNavigationItem) {
@@ -106,10 +109,12 @@ function WorkspaceSidebar({
   email,
   isSigningOut,
   onSignOut,
+  sidebarContent,
 }: {
   email: string;
   isSigningOut: boolean;
   onSignOut: () => void;
+  sidebarContent?: ReactNode;
 }) {
   return (
     <aside className="sticky top-0 hidden h-svh w-60 shrink-0 border-r border-border/80 bg-background lg:flex lg:flex-col">
@@ -127,19 +132,25 @@ function WorkspaceSidebar({
           </span>
         </Link>
 
-        <nav aria-label="Primary workspace" className="mt-12">
+        <nav
+          aria-label="Primary workspace"
+          className="mt-12 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1"
+        >
           <p className="px-3 font-mono text-[0.62rem] uppercase tracking-[0.18em] text-muted-foreground">
             Workspace
           </p>
           <div className="mt-3 space-y-1">
             {workspaceNavigation.map((item) => (
-              <WorkspaceNavLink key={item.key} item={item} />
+              <div key={item.key}>
+                <WorkspaceNavLink item={item} />
+                {item.key === "focus" ? sidebarContent : null}
+              </div>
             ))}
           </div>
         </nav>
 
-        <Separator className="mt-auto mb-5" />
-        <div>
+        <div className="shrink-0">
+          <Separator className="mt-5 mb-5" />
           <Card size="sm" className="mb-5 border-border/70 bg-card/50 p-3 ring-0">
             <div className="flex items-center gap-2">
               <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
@@ -206,11 +217,15 @@ function MobileWorkspaceNav() {
   );
 }
 
-export function WorkspaceShell({ email, children }: WorkspaceShellProps) {
+export function WorkspaceShell({ email, children, sidebarContent }: WorkspaceShellProps) {
   const queryClient = useQueryClient();
   const feedback = useFeedback();
+  const logActivity = useActivityLogger();
   const mutation = useMutation({
-    mutationFn: logout,
+    mutationFn: async () => {
+      await logActivity({ event_type: "auth.logged_out" });
+      return logout();
+    },
     onSuccess: () => {
       queryClient.setQueryData(authQueryKey, null);
     },
@@ -232,6 +247,7 @@ export function WorkspaceShell({ email, children }: WorkspaceShellProps) {
           email={email}
           isSigningOut={mutation.isPending}
           onSignOut={signOut}
+          sidebarContent={sidebarContent}
         />
         <div className="min-w-0 flex-1">
           <MobileWorkspaceHeader
@@ -381,6 +397,8 @@ function HomeContextRail() {
           The visual workspace and agent tools share the same service boundary.
         </p>
       </section>
+
+      <ActivityFeed />
     </aside>
   );
 }

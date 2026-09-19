@@ -16,6 +16,8 @@ from ..tasks.schemas import (
     TaskReorderRequest,
     TaskResponse,
     TaskStatus,
+    TaskSummaryResponse,
+    TaskTagSummaryResponse,
     TaskUpdateRequest,
 )
 from ..tasks.service import (
@@ -26,6 +28,7 @@ from ..tasks.service import (
     get_task,
     list_tasks,
     reorder_task,
+    summarize_tasks,
     update_task,
 )
 from .dependencies import (
@@ -75,6 +78,28 @@ async def create_task_route(
     return _response(record)
 
 
+@router.get("/summary", response_model=TaskSummaryResponse)
+async def task_summary_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    timezone: Annotated[str, Query(min_length=1, max_length=64)] = "UTC",
+) -> TaskSummaryResponse:
+    """Return global counts for task views and populated tags."""
+
+    try:
+        summary = await summarize_tasks(storage, auth.user.id, timezone)
+    except TaskError as exc:
+        _raise_http(exc)
+    return TaskSummaryResponse(
+        all=summary.all,
+        today=summary.today,
+        upcoming=summary.upcoming,
+        overdue=summary.overdue,
+        high_priority=summary.high_priority,
+        tags=[TaskTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags],
+    )
+
+
 @router.get("", response_model=TaskListResponse)
 async def list_tasks_route(
     storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
@@ -82,6 +107,7 @@ async def list_tasks_route(
     statuses: Annotated[list[TaskStatus] | None, Query(alias="status")] = None,
     priorities: Annotated[list[TaskPriority] | None, Query(alias="priority")] = None,
     tags: Annotated[list[str] | None, Query(alias="tag")] = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
     due_from: datetime | None = None,
     due_to: datetime | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -98,6 +124,7 @@ async def list_tasks_route(
                 statuses=tuple(statuses or ()),
                 priorities=tuple(priorities or ()),
                 tags=tuple(tags or ()),
+                search=search,
                 due_from=due_from,
                 due_to=due_to,
                 limit=limit,

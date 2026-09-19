@@ -23,6 +23,8 @@ from .tasks.schemas import (
     TaskReorderRequest,
     TaskResponse,
     TaskStatus,
+    TaskSummaryResponse,
+    TaskTagSummaryResponse,
     TaskUpdateRequest,
 )
 from .tasks.service import (
@@ -33,6 +35,7 @@ from .tasks.service import (
     get_task,
     list_tasks,
     reorder_task,
+    summarize_tasks,
     update_task,
 )
 
@@ -98,6 +101,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         status: list[TaskStatus] | None = None,
         priority: list[TaskPriority] | None = None,
         tag: list[str] | None = None,
+        search: str | None = None,
         due_from: datetime | None = None,
         due_to: datetime | None = None,
         limit: int = 50,
@@ -116,6 +120,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                     statuses=tuple(status or ()),
                     priorities=tuple(priority or ()),
                     tags=tuple(tag or ()),
+                    search=search,
                     due_from=due_from,
                     due_to=due_to,
                     limit=limit,
@@ -128,6 +133,31 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         return TaskListResponse(
             items=[_response(record) for record in page.items],
             next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_task_summary")
+    async def get_task_summary_tool(
+        timezone: str = "UTC",
+        ctx: Context | None = None,
+    ) -> TaskSummaryResponse:
+        """Return global task-view counts and populated tags."""
+
+        del ctx
+        try:
+            summary = await summarize_tasks(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                timezone,
+            )
+        except TaskError as exc:
+            _raise_tool(exc)
+        return TaskSummaryResponse(
+            all=summary.all,
+            today=summary.today,
+            upcoming=summary.upcoming,
+            overdue=summary.overdue,
+            high_priority=summary.high_priority,
+            tags=[TaskTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags],
         )
 
     @server.tool(name="get_task")

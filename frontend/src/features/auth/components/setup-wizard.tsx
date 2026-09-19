@@ -9,6 +9,7 @@ import { z } from "zod";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useActivityLogger } from "@/features/activity/hooks";
 import { ApiError } from "@/lib/api/client";
 import {
   authQueryKey,
@@ -49,6 +50,7 @@ export function SetupWizard() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const feedback = useFeedback();
+  const logActivity = useActivityLogger();
   const [step, setStep] = useState<1 | 2>(1);
   const [setupSecret, setSetupSecret] = useState("");
   const [email, setEmail] = useState("");
@@ -105,7 +107,8 @@ export function SetupWizard() {
 
   const mutation = useMutation({
     mutationFn: setupOwner,
-    onSuccess: (user) => {
+    onSuccess: async (user) => {
+      await logActivity({ event_type: "auth.setup_completed" });
       queryClient.setQueryData(authQueryKey, user);
       setSetupSecret("");
       setPassword("");

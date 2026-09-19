@@ -51,3 +51,9 @@ class InvalidTaskTagError(TaskError):
     status_code = 422
     code = "invalid_task_tag"
     message = "Task tags must be non-empty and at most 64 characters."
+
+
+class InvalidTaskSummaryTimezoneError(TaskError):
+    status_code = 422
+    code = "invalid_task_summary_timezone"
+    message = "The task summary timezone is invalid."

@@ -121,3 +121,17 @@ class TaskResponse(BaseModel):
 class TaskListResponse(BaseModel):
     items: list[TaskResponse]
     next_cursor: str | None
+
+
+class TaskTagSummaryResponse(BaseModel):
+    name: str
+    count: int = Field(ge=0)
+
+
+class TaskSummaryResponse(BaseModel):
+    all: int = Field(ge=0)
+    today: int = Field(ge=0)
+    upcoming: int = Field(ge=0)
+    overdue: int = Field(ge=0)
+    high_priority: int = Field(ge=0)
+    tags: list[TaskTagSummaryResponse]

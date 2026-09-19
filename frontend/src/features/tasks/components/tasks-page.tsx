@@ -3,12 +3,13 @@
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
 import { Clock3, Plus } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,15 +24,17 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
+import { useActivityLogger } from "@/features/activity/hooks";
 import {
   createTask,
   deleteTask,
+  getTaskSummary,
   listTasks,
   taskQueryKey,
+  taskSummaryQueryKey,
   updateTask,
   type Task,
   type TaskEditableField,
-  type TaskListFilters,
   type TaskListPage,
   type TaskPriority,
   type TaskStatus,
@@ -39,24 +42,27 @@ import {
 } from "../api";
 import { statusLabel, TASK_STATUSES } from "../utils";
 import {
+  parseTaskUrlState,
+  taskListFiltersForState,
+  taskSummaryTimezone,
+  taskViewLabel,
+  type TaskUrlState,
+  type TaskView,
+} from "../task-filters";
+import {
   formValuesToPayload,
   TaskCreateDialog,
   type TaskFormValues,
 } from "./task-create-dialog";
 import { TaskDetailsDrawer } from "./task-details-drawer";
+import { TaskFilterToolbar } from "./task-filter-toolbar";
 import { TaskList, type TaskListTab } from "./task-list";
+import { TaskViewNavigation } from "./task-view-navigation";
 import {
   WorkspaceRouteGuard,
   WorkspaceShell,
 } from "@/features/workspace/components/workspace-shell";
 import { useCurrentUser } from "@/features/auth/hooks";
-
-const taskListFilters: TaskListFilters = {
-  statuses: [],
-  priorities: [],
-  tags: [],
-};
-const taskListQueryKey = [...taskQueryKey, taskListFilters] as const;
 
 const statusOrder = new Map<TaskStatus, number>(
   TASK_STATUSES.map((status, index) => [status.value, index]),
@@ -194,16 +200,46 @@ function DeleteTaskDialog({
 }
 
 export function TasksPage({ email }: { email: string }) {
+  const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const feedback = useFeedback();
+  const logActivity = useActivityLogger();
   const [selectedTab, setSelectedTab] = useState<TaskListTab>("all");
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [timezone] = useState(() => taskSummaryTimezone());
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [detailsTaskId, setDetailsTaskId] = useState<string | null>(null);
   const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
+
+  const searchParamsValue = searchParams.toString();
+  const urlState = useMemo<TaskUrlState>(
+    () => parseTaskUrlState(new URLSearchParams(searchParamsValue)),
+    [searchParamsValue],
+  );
+  const taskListFilters = useMemo(
+    () => taskListFiltersForState(urlState, currentTime),
+    [currentTime, urlState],
+  );
+  const taskListQueryKey = useMemo(
+    () => [...taskQueryKey, "list", taskListFilters] as const,
+    [taskListFilters],
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const summaryQuery = useQuery({
+    queryKey: [...taskSummaryQueryKey, timezone],
+    queryFn: () => getTaskSummary(timezone),
+    enabled: Boolean(timezone),
+  });
 
   const query = useInfiniteQuery({
     queryKey: taskListQueryKey,
@@ -213,12 +249,112 @@ export function TasksPage({ email }: { email: string }) {
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   });
 
+  const updateTaskUrl = useCallback(
+    (update: (params: URLSearchParams) => void, replace = false) => {
+      const params = new URLSearchParams(searchParamsValue);
+      update(params);
+      const queryString = params.toString();
+      const nextUrl = queryString ? `${pathname}?${queryString}` : pathname;
+
+      if (replace) {
+        router.replace(nextUrl, { scroll: false });
+      } else {
+        router.push(nextUrl, { scroll: false });
+      }
+    },
+    [pathname, router, searchParamsValue],
+  );
+
+  const handleViewChange = useCallback(
+    (view: TaskView) => {
+      setSelectedTab("all");
+      updateTaskUrl((params) => {
+        if (view === "all") {
+          params.delete("view");
+        } else {
+          params.set("view", view);
+        }
+
+        if (view !== "custom") {
+          params.delete("from");
+          params.delete("to");
+        }
+      });
+    },
+    [updateTaskUrl],
+  );
+
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      updateTaskUrl((params) => {
+        if (value) {
+          params.set("q", value);
+        } else {
+          params.delete("q");
+        }
+      }, true);
+    },
+    [updateTaskUrl],
+  );
+
+  const handleTagToggle = useCallback(
+    (tag: string) => {
+      updateTaskUrl((params) => {
+        const tags = new Set(params.getAll("tag"));
+        if (tags.has(tag)) {
+          tags.delete(tag);
+        } else {
+          tags.add(tag);
+        }
+        params.delete("tag");
+        for (const value of tags) {
+          params.append("tag", value);
+        }
+      });
+    },
+    [updateTaskUrl],
+  );
+
+  const handleTagsClear = useCallback(() => {
+    updateTaskUrl((params) => params.delete("tag"));
+  }, [updateTaskUrl]);
+
+  const handleCustomRangeApply = useCallback(
+    (from: string, to: string) => {
+      setSelectedTab("all");
+      updateTaskUrl((params) => {
+        params.set("view", "custom");
+        params.set("from", from);
+        params.set("to", to);
+      });
+    },
+    [updateTaskUrl],
+  );
+
+  const handleCustomRangeClear = useCallback(() => {
+    setSelectedTab("all");
+    updateTaskUrl((params) => {
+      params.delete("view");
+      params.delete("from");
+      params.delete("to");
+    });
+  }, [updateTaskUrl]);
+
+  const handleClearFilters = useCallback(() => {
+    updateTaskUrl((params) => {
+      params.delete("view");
+      params.delete("q");
+      params.delete("tag");
+      params.delete("from");
+      params.delete("to");
+    });
+  }, [updateTaskUrl]);
+
   const tasks = useMemo(
     () => query.data?.pages.flatMap((page) => page.items) ?? [],
     [query.data],
   );
   const visibleTasks = tasks;
-  const now = new Date();
   const tabCounts = useMemo<Record<TaskListTab, number>>(() => {
     const counts: Record<TaskListTab, number> = {
       all: visibleTasks.length,
@@ -265,7 +401,13 @@ export function TasksPage({ email }: { email: string }) {
 
   const createMutation = useMutation({
     mutationFn: createTask,
-    onSuccess: () => {
+    onSuccess: (task) => {
+      void logActivity({
+        event_type: "task.created",
+        entity_type: "task",
+        entity_id: task.id,
+        metadata: { title: task.title },
+      });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       setCreateDialogOpen(false);
       feedback.success({ title: "Task added to the list." });
@@ -300,7 +442,26 @@ export function TasksPage({ email }: { email: string }) {
 
       return { previousValue, optimisticValue };
     },
-    onSuccess: (_savedTask, variables) => {
+    onSuccess: (savedTask, variables) => {
+      const metadata: Record<string, unknown> = {
+        title: savedTask.title,
+        changed_fields: [variables.field],
+      };
+
+      if (variables.field === "status") {
+        metadata.status = savedTask.status;
+      }
+
+      if (variables.field === "priority") {
+        metadata.priority = savedTask.priority;
+      }
+
+      void logActivity({
+        event_type: "task.updated",
+        entity_type: "task",
+        entity_id: savedTask.id,
+        metadata,
+      });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
 
       if (variables.notify !== false) {
@@ -336,8 +497,14 @@ export function TasksPage({ email }: { email: string }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (taskId: string) => deleteTask(taskId),
-    onSuccess: () => {
+    mutationFn: ({ taskId }: { taskId: string; title: string }) => deleteTask(taskId),
+    onSuccess: (_response, variables) => {
+      void logActivity({
+        event_type: "task.deleted",
+        entity_type: "task",
+        entity_id: variables.taskId,
+        metadata: { title: variables.title },
+      });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       setDeleteOpen(false);
       setPendingDelete(null);
@@ -465,12 +632,34 @@ export function TasksPage({ email }: { email: string }) {
     sessionError || hasInitialTaskSessionError || (nextPageError && isSessionError(nextPageError)),
   );
   const selectedTabLabel = selectedTab === "all" ? "All" : statusLabel(selectedTab);
+  const selectedViewLabel = taskViewLabel(urlState.view);
+  const pageTitle = selectedTab === "all"
+    ? selectedViewLabel
+    : `${selectedViewLabel} · ${selectedTabLabel}`;
+  const hasActiveFilters = Boolean(
+    urlState.search ||
+      urlState.tags.length ||
+      urlState.view !== "all" ||
+      urlState.from ||
+      urlState.to,
+  );
   const selectedTask = detailsTaskId
     ? visibleTasks.find((task) => task.id === detailsTaskId) ?? null
     : null;
 
   return (
-    <WorkspaceShell email={email}>
+    <WorkspaceShell
+      email={email}
+      sidebarContent={
+        <TaskViewNavigation
+          state={urlState}
+          summary={summaryQuery.data}
+          isSummaryPending={summaryQuery.isPending}
+          onViewChange={handleViewChange}
+          onTagToggle={handleTagToggle}
+        />
+      }
+    >
       <section aria-labelledby="task-list-title" className="mt-0">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -478,7 +667,7 @@ export function TasksPage({ email }: { email: string }) {
               Workflow
             </p>
             <h2 id="task-list-title" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">
-              {selectedTabLabel} tasks
+              {pageTitle}
             </h2>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">
@@ -486,6 +675,18 @@ export function TasksPage({ email }: { email: string }) {
             <span>{tabCounts.in_progress} in motion</span>
           </div>
         </div>
+
+        <TaskFilterToolbar
+          state={urlState}
+          summary={summaryQuery.data}
+          isSummaryPending={summaryQuery.isPending}
+          onViewChange={handleViewChange}
+          onSearchChange={handleSearchChange}
+          onTagToggle={handleTagToggle}
+          onTagsClear={handleTagsClear}
+          onCustomRangeApply={handleCustomRangeApply}
+          onCustomRangeClear={handleCustomRangeClear}
+        />
 
         {query.isPending ? (
           <TaskListSkeleton />
@@ -497,18 +698,33 @@ export function TasksPage({ email }: { email: string }) {
             <div className="flex items-center gap-2 text-primary">
               <Clock3 aria-hidden="true" className="size-4" />
               <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">
-                {visibleTasks.length === 0 ? "Ready for a first task" : `No ${selectedTabLabel.toLowerCase()} tasks`}
+                {visibleTasks.length === 0
+                  ? hasActiveFilters
+                    ? "No matching tasks"
+                    : "Ready for a first task"
+                  : `No ${selectedTabLabel.toLowerCase()} tasks`}
               </p>
             </div>
             <h3 className="mt-4 max-w-lg text-xl font-medium tracking-[-0.025em] sm:text-2xl">
-              {visibleTasks.length === 0 ? "Start with one clear next action." : `Nothing is ${selectedTabLabel.toLowerCase()} right now.`}
+              {visibleTasks.length === 0
+                ? hasActiveFilters
+                  ? "Try clearing a filter or search for a different task."
+                  : "Start with one clear next action."
+                : `Nothing is ${selectedTabLabel.toLowerCase()} right now.`}
             </h3>
             <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
               {visibleTasks.length === 0
-                ? "Capture a specific task and keep it close enough to move forward."
+                ? hasActiveFilters
+                  ? "The current view does not contain any tasks that match these filters."
+                  : "Capture a specific task and keep it close enough to move forward."
                 : "Choose another status tab or add a new task to this list."}
             </p>
             <div className="mt-6 flex flex-wrap gap-2">
+              {hasActiveFilters ? (
+                <Button type="button" variant="outline" onClick={handleClearFilters}>
+                  Clear filters
+                </Button>
+              ) : null}
               {visibleTasks.length > 0 && selectedTab !== "all" ? (
                 <Button type="button" variant="outline" onClick={() => setSelectedTab("all")}>
                   View all tasks
@@ -526,7 +742,7 @@ export function TasksPage({ email }: { email: string }) {
               tasks={tabTasks}
               counts={tabCounts}
               selectedTab={selectedTab}
-              now={now}
+              now={currentTime}
               isUpdatingTaskId={
                 taskUpdateMutation.isPending
                   ? taskUpdateMutation.variables?.taskId
@@ -581,7 +797,10 @@ export function TasksPage({ email }: { email: string }) {
         onOpenChange={closeDelete}
         onConfirm={() => {
           if (pendingDelete) {
-            deleteMutation.mutate(pendingDelete.id);
+            deleteMutation.mutate({
+              taskId: pendingDelete.id,
+              title: pendingDelete.title,
+            });
           }
         }}
       />
@@ -619,7 +838,11 @@ export function TasksRoute() {
 
   return (
     <WorkspaceRouteGuard>
-      {currentUser.data ? <TasksPage email={currentUser.data.email} /> : null}
+      {currentUser.data ? (
+        <Suspense fallback={<TaskListSkeleton />}>
+          <TasksPage email={currentUser.data.email} />
+        </Suspense>
+      ) : null}
     </WorkspaceRouteGuard>
   );
 }

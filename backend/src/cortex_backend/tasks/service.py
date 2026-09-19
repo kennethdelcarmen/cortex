@@ -8,11 +8,13 @@ import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..storage import DatabaseStorage
 from .errors import (
@@ -21,6 +23,7 @@ from .errors import (
     InvalidTaskDateTimezoneError,
     InvalidTaskQueryError,
     InvalidTaskReorderError,
+    InvalidTaskSummaryTimezoneError,
     InvalidTaskTagError,
     TaskNotFoundError,
 )
@@ -55,6 +58,7 @@ class TaskListFilters:
     statuses: tuple[TaskStatus, ...] = ()
     priorities: tuple[TaskPriority, ...] = ()
     tags: tuple[str, ...] = ()
+    search: str | None = None
     due_from: datetime | None = None
     due_to: datetime | None = None
     limit: int = 50
@@ -66,6 +70,22 @@ class TaskListFilters:
 class TaskPage:
     items: list[TaskRecord]
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class TaskTagSummaryRecord:
+    name: str
+    count: int
+
+
+@dataclass(frozen=True)
+class TaskSummaryRecord:
+    all: int
+    today: int
+    upcoming: int
+    overdue: int
+    high_priority: int
+    tags: list[TaskTagSummaryRecord]
 
 
 def _utc_now() -> datetime:
@@ -107,6 +127,17 @@ def normalize_tag_names(values: list[str] | tuple[str, ...] | None) -> tuple[str
     if len(normalized) > 20:
         raise InvalidTaskTagError()
     return tuple(normalized)
+
+
+def normalize_search(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().casefold()
+    if not normalized:
+        return None
+    if len(normalized) > 200:
+        raise InvalidTaskQueryError()
+    return normalized
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -187,7 +218,7 @@ async def _get_task_row(db: AsyncSession, user_id: str, task_id: str) -> Task:
     return task
 
 
-def _status_rank_expression():
+def _status_rank_expression() -> ColumnElement[int]:
     return case(
         (Task.status == TaskStatus.BACKLOG.value, 0),
         (Task.status == TaskStatus.TODO.value, 1),
@@ -279,6 +310,7 @@ def _filter_fingerprint(filters: TaskListFilters) -> str:
         "statuses": [status.value for status in filters.statuses],
         "priorities": [priority.value for priority in filters.priorities],
         "tags": list(normalize_tag_names(filters.tags)),
+        "search": normalize_search(filters.search),
         "due_from": filters.due_from.isoformat() if filters.due_from else None,
         "due_to": filters.due_to.isoformat() if filters.due_to else None,
     }
@@ -375,6 +407,7 @@ async def list_tasks(
         statuses=filters.statuses,
         priorities=filters.priorities,
         tags=normalized_tags,
+        search=normalize_search(filters.search),
         due_from=due_from,
         due_to=due_to,
         limit=filters.limit,
@@ -393,6 +426,25 @@ async def list_tasks(
         if normalized_filters.priorities:
             stmt = stmt.where(
                 Task.priority.in_([priority.value for priority in normalized_filters.priorities])
+            )
+        if normalized_filters.search is not None:
+            search_pattern = f"%{normalized_filters.search}%"
+            tag_search = (
+                select(TaskTag.task_id)
+                .join(Tag, Tag.id == TaskTag.tag_id)
+                .where(
+                    TaskTag.task_id == Task.id,
+                    Tag.user_id == user_id,
+                    func.lower(Tag.name).like(search_pattern),
+                )
+                .exists()
+            )
+            stmt = stmt.where(
+                or_(
+                    func.lower(Task.title).like(search_pattern),
+                    func.lower(func.coalesce(Task.description, "")).like(search_pattern),
+                    tag_search,
+                )
             )
         if normalized_filters.due_from is not None:
             stmt = stmt.where(Task.due_at >= normalized_filters.due_from)
@@ -508,6 +560,92 @@ async def list_tasks(
         return TaskPage(
             items=[_record(task, tags.get(task.id, [])) for task in page_rows],
             next_cursor=next_cursor,
+        )
+
+
+def _summary_day_bounds(timezone_name: str) -> tuple[datetime, datetime, datetime]:
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise InvalidTaskSummaryTimezoneError() from None
+
+    now = _utc_now()
+    local_now = now.astimezone(timezone)
+    today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_start = today_start + timedelta(days=1)
+    return (
+        now,
+        today_start.astimezone(UTC),
+        tomorrow_start.astimezone(UTC),
+    )
+
+
+async def summarize_tasks(
+    storage: DatabaseStorage,
+    user_id: str,
+    timezone_name: str,
+) -> TaskSummaryRecord:
+    """Return global task-view counts and the user's populated tags."""
+
+    now, today_start, tomorrow_start = _summary_day_bounds(timezone_name)
+    active_statuses = [
+        TaskStatus.BACKLOG.value,
+        TaskStatus.TODO.value,
+        TaskStatus.IN_PROGRESS.value,
+    ]
+
+    async with storage.session() as db:
+        base = select(func.count(Task.id)).where(
+            Task.user_id == user_id,
+            Task.deleted_at.is_(None),
+        )
+
+        async def count_tasks(*conditions: ColumnElement[bool]) -> int:
+            result = await db.scalar(base.where(*conditions))
+            return int(result or 0)
+
+        today = await count_tasks(
+            Task.status.in_(active_statuses),
+            Task.due_at >= today_start,
+            Task.due_at < tomorrow_start,
+        )
+        upcoming = await count_tasks(
+            Task.status.in_(active_statuses),
+            Task.due_at >= tomorrow_start,
+        )
+        overdue = await count_tasks(
+            Task.status.in_(active_statuses),
+            Task.due_at < now,
+        )
+        high_priority = await count_tasks(
+            Task.status.in_(active_statuses),
+            Task.priority == TaskPriority.HIGH.value,
+        )
+
+        tag_rows = await db.execute(
+            select(Tag.name, func.count(TaskTag.task_id))
+            .join(TaskTag, TaskTag.tag_id == Tag.id)
+            .join(
+                Task,
+                and_(
+                    Task.id == TaskTag.task_id,
+                    Task.user_id == user_id,
+                    Task.deleted_at.is_(None),
+                ),
+            )
+            .where(Tag.user_id == user_id)
+            .group_by(Tag.name)
+            .order_by(Tag.name.asc())
+        )
+        tags = [TaskTagSummaryRecord(name=name, count=int(count)) for name, count in tag_rows.all()]
+
+        return TaskSummaryRecord(
+            all=await db.scalar(base) or 0,
+            today=today,
+            upcoming=upcoming,
+            overdue=overdue,
+            high_priority=high_priority,
+            tags=tags,
         )
 
 
