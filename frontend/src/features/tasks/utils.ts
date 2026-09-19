@@ -26,6 +26,11 @@ export type TaskPriorityOption = {
   colorClass: string;
 };
 
+export type TaskDateTimeValue = {
+  date: string;
+  time: string;
+};
+
 export const TASK_STATUSES: TaskStatusOption[] = [
   {
     value: "backlog",
@@ -112,6 +117,10 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
+export function currentLocalDateInput(now = new Date()) {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 export function toLocalDateTimeInput(value: string | null) {
   if (!value) {
     return "";
@@ -129,6 +138,17 @@ export function toLocalDateTimeInput(value: string | null) {
   ].join("T");
 }
 
+export function toLocalDateTimeParts(value: string | null): TaskDateTimeValue {
+  const input = toLocalDateTimeInput(value);
+
+  if (!input) {
+    return { date: "", time: "" };
+  }
+
+  const [date = "", time = ""] = input.split("T");
+  return { date, time };
+}
+
 export function localDateTimeToIso(value: string) {
   if (!value) {
     return null;
@@ -136,6 +156,58 @@ export function localDateTimeToIso(value: string) {
 
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function localDateTimePartsToIso(value: TaskDateTimeValue) {
+  if (!value.date) {
+    return null;
+  }
+
+  return localDateTimeToIso(`${value.date}T${value.time || "00:00"}`);
+}
+
+export function adjustDueDateForStart(
+  startAt: TaskDateTimeValue,
+  dueAt: TaskDateTimeValue,
+) {
+  if (!startAt.date || !dueAt.date || dueAt.date >= startAt.date) {
+    return dueAt;
+  }
+
+  return { ...dueAt, date: startAt.date };
+}
+
+export function taskDateTimeError(value: TaskDateTimeValue) {
+  if (!value.date) {
+    if (value.time) {
+      return "Choose a date before setting a time.";
+    }
+
+    return undefined;
+  }
+
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.date);
+  const timeValue = value.time || "00:00";
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(timeValue);
+  const iso = localDateTimePartsToIso(value);
+
+  if (!dateMatch || !timeMatch || !iso) {
+    return "Use a valid local date and time.";
+  }
+
+  const date = new Date(`${value.date}T${timeValue}`);
+  const matchesInput =
+    date.getFullYear() === Number(dateMatch[1]) &&
+    date.getMonth() + 1 === Number(dateMatch[2]) &&
+    date.getDate() === Number(dateMatch[3]) &&
+    date.getHours() === Number(timeMatch[1]) &&
+    date.getMinutes() === Number(timeMatch[2]);
+
+  if (!matchesInput) {
+    return "Use a valid local date and time.";
+  }
+
+  return undefined;
 }
 
 export function localDateToIso(value: string, endOfDay = false) {

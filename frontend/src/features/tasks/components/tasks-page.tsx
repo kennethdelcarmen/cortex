@@ -4,6 +4,7 @@ import {
   useInfiniteQuery,
   useMutation,
   useQueryClient,
+  type InfiniteData,
 } from "@tanstack/react-query";
 import { Clock3, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -29,7 +30,9 @@ import {
   taskQueryKey,
   updateTask,
   type Task,
+  type TaskEditableField,
   type TaskListFilters,
+  type TaskListPage,
   type TaskPriority,
   type TaskStatus,
   type TaskUpdateInput,
@@ -37,9 +40,10 @@ import {
 import { statusLabel, TASK_STATUSES } from "../utils";
 import {
   formValuesToPayload,
-  TaskFormSheet,
+  TaskCreateDialog,
   type TaskFormValues,
-} from "./task-form-sheet";
+} from "./task-create-dialog";
+import { TaskDetailsDrawer } from "./task-details-drawer";
 import { TaskList, type TaskListTab } from "./task-list";
 import {
   WorkspaceRouteGuard,
@@ -52,6 +56,7 @@ const taskListFilters: TaskListFilters = {
   priorities: [],
   tags: [],
 };
+const taskListQueryKey = [...taskQueryKey, taskListFilters] as const;
 
 const statusOrder = new Map<TaskStatus, number>(
   TASK_STATUSES.map((status, index) => [status.value, index]),
@@ -156,7 +161,7 @@ function DeleteTaskDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="w-[min(28rem,calc(100vw-2rem))] rounded-xl border-border bg-card p-6 text-card-foreground shadow-[0_24px_80px_-35px_color-mix(in_oklab,var(--foreground)_65%,transparent)] sm:max-w-none sm:p-7"
+        className="w-[min(28rem,calc(100vw-2rem))] rounded-xl border-border bg-card p-6 text-card-foreground shadow-none sm:max-w-none sm:p-7"
       >
         <DialogHeader>
           <DialogTitle className="text-xl font-semibold tracking-[-0.025em]">
@@ -193,15 +198,15 @@ export function TasksPage({ email }: { email: string }) {
   const queryClient = useQueryClient();
   const feedback = useFeedback();
   const [selectedTab, setSelectedTab] = useState<TaskListTab>("all");
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [detailsTaskId, setDetailsTaskId] = useState<string | null>(null);
+  const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
-  const [optimisticTasks, setOptimisticTasks] = useState<Task[] | null>(null);
 
   const query = useInfiniteQuery({
-    queryKey: [...taskQueryKey, taskListFilters],
+    queryKey: taskListQueryKey,
     queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
       listTasks(taskListFilters, pageParam, "due"),
     initialPageParam: "",
@@ -212,7 +217,7 @@ export function TasksPage({ email }: { email: string }) {
     () => query.data?.pages.flatMap((page) => page.items) ?? [],
     [query.data],
   );
-  const visibleTasks = optimisticTasks ?? tasks;
+  const visibleTasks = tasks;
   const now = new Date();
   const tabCounts = useMemo<Record<TaskListTab, number>>(() => {
     const counts: Record<TaskListTab, number> = {
@@ -237,86 +242,107 @@ export function TasksPage({ email }: { email: string }) {
     return orderTasks(filtered, selectedTab === "all");
   }, [selectedTab, visibleTasks]);
 
-  const saveMutation = useMutation({
-    mutationFn: ({
-      task,
-      payload,
-    }: {
-      task: Task | null;
-      payload: ReturnType<typeof formValuesToPayload>;
-    }) => (task ? updateTask(task.id, payload) : createTask(payload)),
-    onSuccess: (_savedTask, variables) => {
-      setOptimisticTasks(null);
+  function getCachedTask(taskId: string) {
+    const cachedData = queryClient.getQueryData<InfiniteData<TaskListPage>>(taskListQueryKey);
+    return cachedData?.pages.flatMap((page) => page.items).find((task) => task.id === taskId);
+  }
+
+  function updateTaskInCache(taskId: string, updater: (task: Task) => Task) {
+    queryClient.setQueryData<InfiniteData<TaskListPage>>(taskListQueryKey, (current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        pages: current.pages.map((page) => ({
+          ...page,
+          items: page.items.map((task) => (task.id === taskId ? updater(task) : task)),
+        })),
+      };
+    });
+  }
+
+  const createMutation = useMutation({
+    mutationFn: createTask,
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
-      setSheetOpen(false);
-      setEditingTask(null);
-      feedback.success({
-        title: variables.task ? "Task updated." : "Task added to the list.",
-      });
+      setCreateDialogOpen(false);
+      feedback.success({ title: "Task added to the list." });
     },
-    onError: (error, variables) => {
+    onError: (error) => {
       if (isSessionError(error)) {
         setSessionError(describeTaskError(error));
         return;
       }
 
       feedback.error({
-        title: variables.task ? "Task could not be updated." : "Task could not be added.",
+        title: "Task could not be added.",
         description: describeTaskError(error),
       });
     },
   });
 
-  const inlineUpdateMutation = useMutation({
-    mutationFn: ({
-      taskId,
-      payload,
-    }: {
+  const taskUpdateMutation = useMutation({
+    mutationFn: ({ taskId, payload }: {
       taskId: string;
-      field: "status" | "priority";
+      field: TaskEditableField;
       payload: TaskUpdateInput;
+      notify?: boolean;
     }) => updateTask(taskId, payload),
     onMutate: async (variables) => {
       await queryClient.cancelQueries({ queryKey: taskQueryKey });
-      const previousTasks = optimisticTasks ?? tasks;
-      setOptimisticTasks(
-        previousTasks.map((task) =>
-          task.id === variables.taskId ? { ...task, ...variables.payload } : task,
-        ),
-      );
-      return { previousTasks };
+      const previousTask = getCachedTask(variables.taskId);
+      const previousValue = previousTask?.[variables.field];
+      const optimisticValue = variables.payload[variables.field];
+
+      updateTaskInCache(variables.taskId, (task) => ({ ...task, ...variables.payload }));
+
+      return { previousValue, optimisticValue };
     },
     onSuccess: (_savedTask, variables) => {
-      setOptimisticTasks(null);
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
-      feedback.success({
-        title: variables.field === "status" ? "Status updated." : "Priority updated.",
-      });
+
+      if (variables.notify !== false) {
+        feedback.success({
+          title: variables.field === "status" ? "Status updated." : "Priority updated.",
+        });
+      }
     },
-    onError: (error, _variables, context) => {
-      setOptimisticTasks(context?.previousTasks ?? null);
+    onError: (error, variables, context) => {
+      if (context) {
+        updateTaskInCache(variables.taskId, (task) => {
+          if (task[variables.field] !== context.optimisticValue) {
+            return task;
+          }
+
+          return { ...task, [variables.field]: context.previousValue };
+        });
+      }
+
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       if (isSessionError(error)) {
         setSessionError(describeTaskError(error));
         return;
       }
 
-      feedback.error({
-        title: "Task could not be updated.",
-        description: describeTaskError(error),
-      });
+      if (variables.notify !== false) {
+        feedback.error({
+          title: "Task could not be updated.",
+          description: describeTaskError(error),
+        });
+      }
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (taskId: string) => deleteTask(taskId),
     onSuccess: () => {
-      setOptimisticTasks(null);
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       setDeleteOpen(false);
       setPendingDelete(null);
-      setSheetOpen(false);
-      setEditingTask(null);
+      setDetailsDrawerOpen(false);
+      setDetailsTaskId(null);
       feedback.success({ title: "Task deleted." });
     },
     onError: (error) => {
@@ -333,27 +359,44 @@ export function TasksPage({ email }: { email: string }) {
   });
 
   function openCreate() {
-    saveMutation.reset();
-    setEditingTask(null);
-    setSheetOpen(true);
+    createMutation.reset();
+    setCreateDialogOpen(true);
   }
 
-  function openEdit(task: Task) {
-    saveMutation.reset();
-    setEditingTask(task);
-    setSheetOpen(true);
+  function openDetails(task: Task) {
+    setDetailsTaskId(task.id);
+    setDetailsDrawerOpen(true);
   }
 
-  function closeSheet(open: boolean) {
-    setSheetOpen(open);
+  function closeCreateDialog(open: boolean) {
+    setCreateDialogOpen(open);
     if (!open) {
-      saveMutation.reset();
-      setEditingTask(null);
+      createMutation.reset();
     }
   }
 
-  function handleSave(values: TaskFormValues) {
-    saveMutation.mutate({ task: editingTask, payload: formValuesToPayload(values) });
+  function closeDetailsDrawer(open: boolean) {
+    setDetailsDrawerOpen(open);
+    if (!open) {
+      setDetailsTaskId(null);
+    }
+  }
+
+  function handleCreate(values: TaskFormValues) {
+    createMutation.mutate(formValuesToPayload(values));
+  }
+
+  async function saveTaskField(field: TaskEditableField, payload: TaskUpdateInput): Promise<void> {
+    if (!detailsTaskId) {
+      throw new Error("No task is selected.");
+    }
+
+    await taskUpdateMutation.mutateAsync({
+      taskId: detailsTaskId,
+      field,
+      payload,
+      notify: false,
+    });
   }
 
   function handleStatusChange(task: Task, status: TaskStatus) {
@@ -361,10 +404,11 @@ export function TasksPage({ email }: { email: string }) {
       return;
     }
 
-    inlineUpdateMutation.mutate({
+    taskUpdateMutation.mutate({
       taskId: task.id,
       field: "status",
       payload: { status },
+      notify: true,
     });
   }
 
@@ -373,15 +417,17 @@ export function TasksPage({ email }: { email: string }) {
       return;
     }
 
-    inlineUpdateMutation.mutate({
+    taskUpdateMutation.mutate({
       taskId: task.id,
       field: "priority",
       payload: { priority },
+      notify: true,
     });
   }
 
   function requestDelete(task: Task) {
-    setSheetOpen(false);
+    setDetailsDrawerOpen(false);
+    setDetailsTaskId(null);
     setPendingDelete(task);
     setDeleteOpen(true);
   }
@@ -419,6 +465,9 @@ export function TasksPage({ email }: { email: string }) {
     sessionError || hasInitialTaskSessionError || (nextPageError && isSessionError(nextPageError)),
   );
   const selectedTabLabel = selectedTab === "all" ? "All" : statusLabel(selectedTab);
+  const selectedTask = detailsTaskId
+    ? visibleTasks.find((task) => task.id === detailsTaskId) ?? null
+    : null;
 
   return (
     <WorkspaceShell email={email}>
@@ -443,7 +492,7 @@ export function TasksPage({ email }: { email: string }) {
         ) : query.isError && !query.data ? (
           <div className="mt-4 min-h-64 rounded-xl border border-border/70 bg-card/40" aria-hidden="true" />
         ) : visibleTasks.length === 0 ? (
-          <Card className="relative mt-4 overflow-hidden rounded-xl border-border/80 p-6 shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)] sm:p-8">
+          <Card className="relative mt-4 overflow-hidden rounded-xl border-border/80 p-6 sm:p-8">
             <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
             <div className="flex items-center gap-2 text-primary">
               <Clock3 aria-hidden="true" className="size-4" />
@@ -479,14 +528,14 @@ export function TasksPage({ email }: { email: string }) {
               selectedTab={selectedTab}
               now={now}
               isUpdatingTaskId={
-                inlineUpdateMutation.isPending
-                  ? inlineUpdateMutation.variables?.taskId
+                taskUpdateMutation.isPending
+                  ? taskUpdateMutation.variables?.taskId
                   : undefined
               }
               onTabChange={setSelectedTab}
               onStatusChange={handleStatusChange}
               onPriorityChange={handlePriorityChange}
-              onEdit={openEdit}
+              onOpenDetails={openDetails}
               onAddTask={openCreate}
             />
             {query.hasNextPage ? (
@@ -506,14 +555,24 @@ export function TasksPage({ email }: { email: string }) {
         )}
       </section>
 
-      <TaskFormSheet
-        key={`${sheetOpen ? "open" : "closed"}-${editingTask?.id ?? "new"}`}
-        open={sheetOpen}
-        task={editingTask}
-        isSaving={saveMutation.isPending}
-        onOpenChange={closeSheet}
-        onSubmit={handleSave}
-        onDeleteRequest={editingTask ? () => requestDelete(editingTask) : undefined}
+      <TaskCreateDialog
+        key={createDialogOpen ? "open" : "closed"}
+        open={createDialogOpen}
+        isSaving={createMutation.isPending}
+        onOpenChange={closeCreateDialog}
+        onSubmit={handleCreate}
+      />
+      <TaskDetailsDrawer
+        key={`${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
+        open={detailsDrawerOpen && Boolean(selectedTask)}
+        task={selectedTask}
+        onOpenChange={closeDetailsDrawer}
+        onSaveField={saveTaskField}
+        onDeleteRequest={() => {
+          if (selectedTask) {
+            requestDelete(selectedTask);
+          }
+        }}
       />
       <DeleteTaskDialog
         task={pendingDelete}

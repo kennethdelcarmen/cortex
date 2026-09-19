@@ -55,6 +55,7 @@ export type TaskWriteInput = {
   tags: string[];
 };
 
+export type TaskEditableField = keyof TaskWriteInput;
 export type TaskUpdateInput = Partial<TaskWriteInput>;
 
 export const taskQueryKey = ["tasks"] as const;

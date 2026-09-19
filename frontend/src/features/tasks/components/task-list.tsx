@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, ListTodo, Pencil, Plus } from "lucide-react";
+import { ArrowRight, CalendarDays, Clock3, ListTodo, Pencil, Plus } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,13 +17,13 @@ import {
   dueUrgency,
   formatDateTime,
   priorityOption,
-  priorityLabel,
   statusOption,
   statusLabel,
   TASK_PRIORITIES,
   TASK_STATUSES,
   urgencyLabel,
 } from "../utils";
+import { TaskOptionValue } from "./task-option-value";
 
 export type TaskListTab = "all" | TaskStatus;
 
@@ -36,7 +36,7 @@ type TaskListProps = {
   onTabChange: (tab: TaskListTab) => void;
   onStatusChange: (task: Task, status: TaskStatus) => void;
   onPriorityChange: (task: Task, priority: TaskPriority) => void;
-  onEdit: (task: Task) => void;
+  onOpenDetails: (task: Task) => void;
   onAddTask: () => void;
 };
 
@@ -142,43 +142,41 @@ function TaskTabs({
   );
 }
 
-function TaskSelectItemIcon({
-  icon: Icon,
-  colorClass,
-}: {
-  icon: typeof ALL_TAB.icon;
-  colorClass: string;
-}) {
-  return <Icon aria-hidden="true" className={cn("size-4", colorClass)} />;
-}
-
 function TaskRow({
   task,
   now,
   isUpdating,
   onStatusChange,
   onPriorityChange,
-  onEdit,
+  onOpenDetails,
 }: {
   task: Task;
   now: Date;
   isUpdating: boolean;
   onStatusChange: (status: TaskStatus) => void;
   onPriorityChange: (priority: TaskPriority) => void;
-  onEdit: () => void;
+  onOpenDetails: () => void;
 }) {
   const status = statusOption(task.status);
   const priority = priorityOption(task.priority);
   const urgency = dueUrgency(task.due_at, now);
-  const StatusIcon = status.icon;
-  const PriorityIcon = priority.icon;
 
   return (
     <li className="border-b border-border/70 last:border-b-0">
       <article
         aria-busy={isUpdating}
+        onClick={(event) => {
+          if (
+            event.target instanceof Element &&
+            event.target.closest("button, a, input, textarea, select, [role='combobox']")
+          ) {
+            return;
+          }
+
+          onOpenDetails();
+        }}
         className={cn(
-          "grid gap-4 p-4 transition-colors hover:bg-muted/25 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] lg:items-center",
+          "grid cursor-pointer gap-4 p-4 transition-colors hover:bg-muted/25 sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto] lg:items-center",
           task.status === "canceled" && "opacity-80",
         )}
       >
@@ -190,7 +188,7 @@ function TaskRow({
             />
             <button
               type="button"
-              onClick={onEdit}
+              onClick={onOpenDetails}
               className={cn(
                 "min-w-0 flex-1 text-left text-sm font-medium leading-5 text-foreground outline-none hover:text-primary focus-visible:rounded-sm focus-visible:ring-3 focus-visible:ring-ring/50",
                 (task.status === "done" || task.status === "canceled") &&
@@ -202,17 +200,33 @@ function TaskRow({
           </div>
 
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-4 text-xs text-muted-foreground">
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 font-mono",
-                urgency === "overdue" && "font-medium text-destructive",
-                urgency === "today" && "font-medium text-primary",
-              )}
-            >
-              <Clock3 aria-hidden="true" className="size-3.5" />
-              {urgencyLabel(urgency)}
-              {task.due_at ? ` · ${formatDateTime(task.due_at)}` : ""}
-            </span>
+            {task.start_at ? (
+              <span className="inline-flex items-center gap-1.5 font-mono">
+                <CalendarDays aria-hidden="true" className="size-3.5" />
+                {formatDateTime(task.start_at)}
+              </span>
+            ) : null}
+            {task.due_at ? (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 whitespace-nowrap font-mono",
+                  urgency === "overdue" && "font-medium text-destructive",
+                  urgency === "today" && "font-medium text-primary",
+                )}
+              >
+                {task.start_at ? (
+                  <ArrowRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+                ) : (
+                  <Clock3 aria-hidden="true" className="size-3.5" />
+                )}
+                {urgencyLabel(urgency)} · {formatDateTime(task.due_at)}
+              </span>
+            ) : !task.start_at ? (
+              <span className="inline-flex items-center gap-1.5 font-mono">
+                <Clock3 aria-hidden="true" className="size-3.5" />
+                {urgencyLabel(urgency)}
+              </span>
+            ) : null}
             {task.tags.map((tag) => (
               <Badge
                 key={tag}
@@ -236,20 +250,15 @@ function TaskRow({
             className={cn("w-full bg-background sm:w-auto", status.colorClass)}
           >
             <SelectValue>
-              <TaskSelectItemIcon icon={StatusIcon} colorClass={status.colorClass} />
-              <span>{statusLabel(task.status)}</span>
+              <TaskOptionValue option={status} />
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {TASK_STATUSES.map((option) => {
-              const Icon = option.icon;
-              return (
-                <SelectItem key={option.value} value={option.value}>
-                  <TaskSelectItemIcon icon={Icon} colorClass={option.colorClass} />
-                  <span>{option.label}</span>
-                </SelectItem>
-              );
-            })}
+            {TASK_STATUSES.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <TaskOptionValue option={option} />
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -264,20 +273,15 @@ function TaskRow({
             className={cn("w-full bg-background sm:w-auto", priority.colorClass)}
           >
             <SelectValue>
-              <TaskSelectItemIcon icon={PriorityIcon} colorClass={priority.colorClass} />
-              <span>{priorityLabel(task.priority)}</span>
+              <TaskOptionValue option={priority} />
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {TASK_PRIORITIES.map((option) => {
-              const Icon = option.icon;
-              return (
-                <SelectItem key={option.value} value={option.value}>
-                  <TaskSelectItemIcon icon={Icon} colorClass={option.colorClass} />
-                  <span>{option.label}</span>
-                </SelectItem>
-              );
-            })}
+            {TASK_PRIORITIES.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <TaskOptionValue option={option} />
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -285,8 +289,8 @@ function TaskRow({
           type="button"
           variant="ghost"
           size="icon-sm"
-          aria-label={`Edit ${task.title}`}
-          onClick={onEdit}
+          aria-label={`Open details for ${task.title}`}
+          onClick={onOpenDetails}
           disabled={isUpdating}
           className="justify-self-start text-muted-foreground hover:text-foreground sm:justify-self-end"
         >
@@ -306,7 +310,7 @@ export function TaskList({
   onTabChange,
   onStatusChange,
   onPriorityChange,
-  onEdit,
+  onOpenDetails,
   onAddTask,
 }: TaskListProps) {
   return (
@@ -334,7 +338,7 @@ export function TaskList({
         role="tabpanel"
         aria-label={`${selectedTab === "all" ? "All" : statusLabel(selectedTab)} tasks`}
         tabIndex={0}
-        className="mt-4 overflow-hidden rounded-xl border border-border/80 bg-card shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)] outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+        className="mt-4 overflow-hidden rounded-xl border border-border/80 bg-card outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
       >
         {tasks.length === 0 ? (
           <div className="px-6 py-12 text-center sm:px-8">
@@ -355,7 +359,7 @@ export function TaskList({
                 isUpdating={isUpdatingTaskId === task.id}
                 onStatusChange={(status) => onStatusChange(task, status)}
                 onPriorityChange={(priority) => onPriorityChange(task, priority)}
-                onEdit={() => onEdit(task)}
+                onOpenDetails={() => onOpenDetails(task)}
               />
             ))}
           </ul>
