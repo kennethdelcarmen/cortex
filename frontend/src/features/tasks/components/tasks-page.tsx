@@ -695,7 +695,7 @@ export function TasksPage({ email }: { email: string }) {
         ) : visibleTasks.length === 0 ? (
           <Card className="relative mt-4 overflow-hidden rounded-xl border-border/80 p-6 sm:p-8">
             <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
-            <div className="flex items-center gap-2 text-primary">
+            <div className="flex items-center gap-2 text-primary-strong">
               <Clock3 aria-hidden="true" className="size-4" />
               <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">
                 {visibleTasks.length === 0

@@ -62,7 +62,7 @@ function NavigationButton({
           : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
       )}
     >
-      <Icon aria-hidden="true" className={cn("size-3.5", selected && "text-primary")} />
+      <Icon aria-hidden="true" className={cn("size-3.5", selected && "text-chart-4")} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {count !== undefined ? (
         <span className="font-mono text-[0.62rem] text-muted-foreground">{count}</span>

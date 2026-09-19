@@ -87,7 +87,7 @@ export const TASK_PRIORITIES: TaskPriorityOption[] = [
     value: "high",
     label: "High",
     icon: ArrowUp,
-    colorClass: "text-primary",
+    colorClass: "text-primary-strong",
   },
 ];
 

@@ -62,7 +62,7 @@ export function CaptureMenu({ compact = false }: CaptureMenuProps) {
                 disabled
                 className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground opacity-75 data-[highlighted]:bg-muted"
               >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary-strong">
                   <Icon aria-hidden="true" className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">

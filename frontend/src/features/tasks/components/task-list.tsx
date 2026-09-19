@@ -44,7 +44,7 @@ const ALL_TAB = {
   value: "all" as const,
   label: "All",
   icon: ListTodo,
-  colorClass: "text-primary",
+  colorClass: "text-chart-4",
 };
 
 function TaskTabs({
@@ -123,7 +123,7 @@ function TaskTabs({
             <span
               className={cn(
                 "min-w-5 rounded-full px-1.5 py-0.5 text-center font-mono text-[0.65rem] leading-none",
-                selected ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground",
+                selected ? "bg-primary/12 text-primary-strong" : "bg-muted text-muted-foreground",
               )}
             >
               {counts[tab.value]}
@@ -190,7 +190,7 @@ function TaskRow({
               type="button"
               onClick={onOpenDetails}
               className={cn(
-                "min-w-0 flex-1 text-left text-sm font-medium leading-5 text-foreground outline-none hover:text-primary focus-visible:rounded-sm focus-visible:ring-3 focus-visible:ring-ring/50",
+                "min-w-0 flex-1 text-left text-sm font-medium leading-5 text-foreground outline-none hover:text-primary-strong focus-visible:rounded-sm focus-visible:ring-3 focus-visible:ring-ring/50",
                 (task.status === "done" || task.status === "canceled") &&
                   "line-through decoration-primary/50",
               )}
@@ -211,7 +211,7 @@ function TaskRow({
                 className={cn(
                   "inline-flex items-center gap-1.5 whitespace-nowrap font-mono",
                   urgency === "overdue" && "font-medium text-destructive",
-                  urgency === "today" && "font-medium text-primary",
+                  urgency === "today" && "font-medium text-primary-strong",
                 )}
               >
                 {task.start_at ? (

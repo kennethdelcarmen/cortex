@@ -17,16 +17,26 @@ dashboard tiles.
 
 Use semantic tokens rather than raw colors in components.
 
-- Paper: #F5F3EC — primary application canvas.
-- Surface: #FFFEFA — cards, panels, and raised reading surfaces.
-- Ink: #202722 — primary text and strong labels.
-- Sage: #68736C — supporting text and quiet status information.
-- Rust: #B85F45 — primary action, active priority, and the single signal color.
-- Border: #D8DDD5 — calm separation between adjacent surfaces.
+- Rose: #F4AFAB — primary action, selected state, active rail, and brand mark.
+- Rose strong: #9E5662 — readable light-theme links, labels, and icons.
+- Canvas: #FBF7F5 — warm rose application background.
+- Surface: #FFFCFA — cards, panels, and raised reading surfaces.
+- Ink: #2B252B — primary text and strong labels.
+- Sea glass: #3A756D — completed and low-priority status.
+- Amber: #94672F — in-progress and medium-priority status.
+- Slate: #4B719B — to-do status and navigation signal.
+- Destructive: #B64D5A — canceled, overdue, and blocking errors.
+- Border: #E6D9DD — quiet separation between adjacent surfaces.
 
-Dark mode keeps the same relationships: deep green-black canvas, warm light
-text, slightly lifted surfaces, softened sage text, and a lighter rust signal.
-The system preference controls the mode; there is no user toggle yet.
+Dark mode keeps the exact Rose brand color while shifting surfaces to plum-black
+and lifting the supporting status colors for contrast. The system preference
+controls the mode; there is no user toggle yet. Rose is reserved for filled
+controls and decorative emphasis in the light theme; Rose strong is used when
+the brand color must appear as readable text.
+
+Task state mapping remains explicit: backlog uses muted text, to-do uses Slate,
+in progress uses Amber, done uses Sea glass, canceled uses Destructive, and
+high priority uses Rose strong. Labels and icons must never rely on color alone.
 
 ### Typography
 

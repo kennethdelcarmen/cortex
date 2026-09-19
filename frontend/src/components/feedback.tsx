@@ -50,7 +50,7 @@ function FeedbackToastList() {
         {isError ? (
           <AlertCircle aria-hidden="true" className="mt-0.5 size-4 text-destructive" />
         ) : (
-          <CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 text-primary" />
+          <CheckCircle2 aria-hidden="true" className="mt-0.5 size-4 text-primary-strong" />
         )}
         <Toast.Content className="min-w-0">
           <Toast.Title className="text-sm font-medium" />
@@ -62,7 +62,7 @@ function FeedbackToastList() {
           {toast.data?.action ? (
             <Toast.Action
               type="button"
-              className="rounded-md px-2 py-1 text-xs font-medium text-primary outline-none hover:bg-primary/10 focus-visible:ring-3 focus-visible:ring-ring/40"
+              className="rounded-md px-2 py-1 text-xs font-medium text-primary-strong outline-none hover:bg-primary/10 focus-visible:ring-3 focus-visible:ring-ring/40"
               onClick={() => {
                 toast.data?.action?.onClick();
                 toastManager.close(toast.id);

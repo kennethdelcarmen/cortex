@@ -86,7 +86,7 @@ function WorkspaceNavLink({
           ? "min-w-16 flex-1 flex-col justify-center gap-1 px-2 py-1 text-[0.68rem]"
           : "px-3 py-2.5",
         active
-          ? "bg-primary/8 font-medium text-foreground"
+          ? "bg-chart-4/10 font-medium text-foreground"
           : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
       )}
     >
@@ -94,7 +94,7 @@ function WorkspaceNavLink({
         <span
           aria-hidden="true"
           className={cn(
-            "absolute inset-y-2 left-0 w-0.5 rounded-full bg-primary transition-opacity",
+            "absolute inset-y-2 left-0 w-0.5 rounded-full bg-chart-4 transition-opacity",
             active ? "opacity-100" : "opacity-0",
           )}
         />
@@ -124,7 +124,7 @@ function WorkspaceSidebar({
           aria-label="Cortex home"
           className="group w-fit rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          <span className="block font-mono text-sm font-medium uppercase tracking-[0.25em] text-primary transition-colors group-hover:text-foreground">
+          <span className="block font-mono text-sm font-medium uppercase tracking-[0.25em] text-primary-strong transition-colors group-hover:text-foreground">
             Cortex
           </span>
           <span className="mt-2 block font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground">
@@ -154,7 +154,7 @@ function WorkspaceSidebar({
           <Card size="sm" className="mb-5 border-border/70 bg-card/50 p-3 ring-0">
             <div className="flex items-center gap-2">
               <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
-              <span className="font-mono text-[0.65rem] font-medium uppercase tracking-[0.15em] text-primary">
+              <span className="font-mono text-[0.65rem] font-medium uppercase tracking-[0.15em] text-primary-strong">
                 Local
               </span>
             </div>
@@ -189,7 +189,7 @@ function MobileWorkspaceHeader({
       <div className="flex h-16 items-center justify-between gap-4 px-4 sm:px-6">
         <Link
           href="/"
-          className="rounded-sm font-mono text-sm font-medium uppercase tracking-[0.23em] text-primary outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="rounded-sm font-mono text-sm font-medium uppercase tracking-[0.23em] text-primary-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           Cortex
         </Link>
@@ -277,7 +277,7 @@ function CurrentDateLabel() {
     <time
       dateTime={now.toISOString().slice(0, 10)}
       suppressHydrationWarning
-      className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary"
+      className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary-strong"
     >
       {dateLabel}
     </time>
@@ -321,7 +321,7 @@ function HomeDashboard() {
           <Card className="relative overflow-hidden rounded-xl border-border/80 p-0 shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
             <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
             <div className="p-6 sm:p-8">
-              <div className="flex items-center gap-2 text-primary">
+              <div className="flex items-center gap-2 text-primary-strong">
                 <Clock3 aria-hidden="true" className="size-4" />
                 <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">
                   Ready for your first move
@@ -366,7 +366,7 @@ function HomeContextRail() {
                 href={module.href}
                 className="group flex gap-3 py-4 outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50"
               >
-                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-card text-primary transition-colors group-hover:border-primary/40">
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-card text-primary-strong transition-colors group-hover:border-primary/40">
                   <Icon aria-hidden="true" className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
@@ -389,7 +389,7 @@ function HomeContextRail() {
         </p>
         <div className="mt-4 flex items-center gap-2">
           <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
-          <Badge variant="outline" className="h-auto rounded-full border-primary/30 px-2 py-0.5 font-mono text-[0.68rem] font-medium uppercase tracking-[0.14em] text-primary">
+          <Badge variant="outline" className="h-auto rounded-full border-primary/30 px-2 py-0.5 font-mono text-[0.68rem] font-medium uppercase tracking-[0.14em] text-primary-strong">
             Local by default
           </Badge>
         </div>
@@ -479,7 +479,7 @@ export function WorkspaceModulePage({
       <div className="max-w-3xl">
         <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-8">
           <div>
-            <p className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary">
+            <p className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary-strong">
               {moduleDefinition.label} / workspace
             </p>
             <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">
@@ -498,10 +498,10 @@ export function WorkspaceModulePage({
           <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
           <div className="p-6 sm:p-8">
             <div className="flex items-center gap-3">
-              <span className="flex size-9 items-center justify-center rounded-md border border-border bg-background text-primary">
+              <span className="flex size-9 items-center justify-center rounded-md border border-border bg-background text-primary-strong">
                 <Icon aria-hidden="true" className="size-4" />
               </span>
-              <span className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em] text-primary">
+              <span className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em] text-primary-strong">
                 Coming next
               </span>
             </div>

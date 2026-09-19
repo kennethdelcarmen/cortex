@@ -24,7 +24,7 @@ export function AuthLayout({
         <section className="max-w-xl">
           <Link
             href="/"
-            className="inline-flex rounded-sm font-mono text-xs font-medium uppercase tracking-[0.24em] text-primary outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
+            className="inline-flex rounded-sm font-mono text-xs font-medium uppercase tracking-[0.24em] text-primary-strong outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/40"
           >
             {eyebrow}
           </Link>

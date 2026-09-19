@@ -157,7 +157,7 @@ export function ActivityFeed() {
             Recent activity
           </h2>
         </div>
-        <Activity aria-hidden="true" className="size-4 text-primary" />
+        <Activity aria-hidden="true" className="size-4 text-primary-strong" />
       </div>
 
       {query.isPending ? (
