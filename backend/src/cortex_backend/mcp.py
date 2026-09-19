@@ -6,6 +6,13 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
 from .api.mcp import database_storage, get_mcp_auth
+from .logs.errors import ActivityLogError
+from .logs.schemas import (
+    ActivityLogCreateRequest,
+    ActivityLogListResponse,
+    ActivityLogResponse,
+)
+from .logs.service import ActivityLogFilters, ActivityLogRecord, append_log, list_logs
 from .storage import Storage
 from .tasks.errors import TaskError
 from .tasks.schemas import (
@@ -47,6 +54,22 @@ def _response(record: TaskRecord) -> TaskResponse:
 
 
 def _raise_tool(error: TaskError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
+def _activity_log_response(record: ActivityLogRecord) -> ActivityLogResponse:
+    return ActivityLogResponse(
+        id=record.id,
+        user_id=record.user_id,
+        event_type=record.event_type,
+        entity_type=record.entity_type,
+        entity_id=record.entity_id,
+        metadata=record.metadata,
+        created_at=record.created_at,
+    )
+
+
+def _raise_activity_log_tool(error: ActivityLogError) -> None:
     raise ToolError(f"{error.code}: {error.message}") from error
 
 
@@ -168,5 +191,54 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         except TaskError as exc:
             _raise_tool(exc)
         return "Task deleted."
+
+    @server.tool(name="append_activity_log")
+    async def append_activity_log_tool(
+        payload: ActivityLogCreateRequest,
+        ctx: Context,
+    ) -> ActivityLogResponse:
+        """Append one owner-scoped activity record."""
+
+        del ctx
+        try:
+            record = await append_log(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                payload,
+            )
+        except ActivityLogError as exc:
+            _raise_activity_log_tool(exc)
+        return _activity_log_response(record)
+
+    @server.tool(name="list_activity_logs")
+    async def list_activity_logs_tool(
+        event_type: str | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> ActivityLogListResponse:
+        """List owner-scoped activity records with bounded cursor pagination."""
+
+        del ctx
+        try:
+            page = await list_logs(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                ActivityLogFilters(
+                    event_type=event_type,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except ActivityLogError as exc:
+            _raise_activity_log_tool(exc)
+        return ActivityLogListResponse(
+            items=[_activity_log_response(record) for record in page.items],
+            next_cursor=page.next_cursor,
+        )
 
     return server

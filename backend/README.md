@@ -77,10 +77,16 @@ The initial service exposes:
 - `GET /api/v1` for versioned API metadata.
 - `/api/v1/auth/*` for local-owner setup, login, logout, current-user, CSRF,
   and password-change operations.
+- `/api/v1/activity-logs` for authenticated activity-log append and history
+  queries with filtering and cursor pagination.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task operations to agents. MCP clients send the existing session token as a
-  bearer token in the `Authorization` header.
+  task and activity-log operations to agents. MCP clients send the existing
+  session token as a bearer token in the `Authorization` header.
+
+Activity records are append-only, owner-scoped, and support bounded listing
+with structured JSON metadata. Automatic task/auth event producers remain
+deferred.
 
 Tasks use the statuses `backlog`, `todo`, `in_progress`, `done`, and `canceled`
 and the priorities `none`, `low`, `medium`, and `high`. Task tags are supplied
@@ -97,10 +103,12 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-The backend now has a persistent SQLite storage foundation, versioned auth and
-task schemas, local-owner authentication, and the first shared REST/MCP domain
-slice. Knowledge, finance, and self-hosting packaging remain deferred. To roll
-back the application after the additive task migration, deploy the previous
-application while leaving the new tables in place. Only run
-`uv run alembic downgrade 0001_auth_foundation` against a backed-up local
-database when intentionally removing the task schema.
+The backend now has a persistent SQLite storage foundation, versioned auth,
+task, and activity-log schemas, local-owner authentication, and the first shared
+REST/MCP domain slice. Knowledge, finance, and self-hosting packaging remain
+deferred. To roll back the application after the additive task and activity-log
+migrations, deploy the previous application while leaving the new tables in
+place. Only run `uv run alembic downgrade 0003_task_positions` against a
+backed-up local database when intentionally removing the activity-log schema.
+Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
+removing the task and activity schemas together.
