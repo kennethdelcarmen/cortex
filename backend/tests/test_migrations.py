@@ -113,6 +113,22 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         assert task_series_tag_columns == {"series_id", "tag_id"}
         assert tag_columns == {"id", "user_id", "name", "created_at"}
         assert task_tag_columns == {"task_id", "tag_id"}
+        note_columns = {row[1] for row in connection.execute("PRAGMA table_info(notes)")}
+        assert note_columns == {
+            "id",
+            "user_id",
+            "title",
+            "body",
+            "journal_date",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+        }
+        note_tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(note_tags)")}
+        assert note_tag_columns == {"note_id", "tag_id"}
+        assert connection.execute(
+            "SELECT type FROM sqlite_master WHERE name = 'notes_fts'"
+        ).fetchone() == ("table",)
         activity_log_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(activity_logs)")
         }
@@ -150,6 +166,9 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_task_series_owner_state_updated",
             "ix_tasks_owner_series_occurrence",
             "ix_task_series_tags_tag_id",
+            "ix_notes_owner_deleted_updated",
+            "ix_notes_owner_deleted_journal",
+            "ix_note_tags_tag_id",
         } <= indexes
 
 
@@ -160,7 +179,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0005_task_recurrencies",
+            "0006_notes_foundation",
         )
 
 
@@ -197,6 +216,9 @@ def test_tasks_migration_downgrade_removes_task_schema(tmp_path, monkeypatch) ->
                 "activity_logs",
                 "task_series",
                 "task_series_tags",
+                "notes",
+                "note_tags",
+                "notes_fts",
             }
             & tables
         )
@@ -230,3 +252,31 @@ def test_activity_logs_migration_downgrade_removes_only_activity_schema(
         }
         assert "activity_logs" not in tables
         assert {"users", "sessions", "tasks", "tags", "task_tags"} <= tables
+
+
+def test_notes_migration_downgrade_removes_only_notes_schema(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch)
+    backend_path = Path(__file__).parents[1]
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(backend_path / "alembic.ini"),
+            "downgrade",
+            "0005_task_recurrencies",
+        ],
+        cwd=backend_path,
+        env=os.environ.copy(),
+        check=True,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert {"users", "sessions", "tasks", "tags", "task_tags"} <= tables
+        assert not {"notes", "note_tags", "notes_fts"} & tables

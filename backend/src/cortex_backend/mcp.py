@@ -1,6 +1,6 @@
 """FastMCP registry composition."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -13,6 +13,18 @@ from .logs.schemas import (
     ActivityLogResponse,
 )
 from .logs.service import ActivityLogFilters, ActivityLogRecord, append_log, list_logs
+from .memory.errors import NoteError
+from .memory.schemas import NoteCreateRequest, NoteListResponse, NoteResponse, NoteUpdateRequest
+from .memory.service import (
+    NoteListFilters,
+    NoteRecord,
+    create_note,
+    delete_note,
+    get_note,
+    list_notes,
+    restore_note,
+    update_note,
+)
 from .storage import Storage
 from .tasks.errors import TaskError
 from .tasks.schemas import (
@@ -118,6 +130,23 @@ def _activity_log_response(record: ActivityLogRecord) -> ActivityLogResponse:
 
 
 def _raise_activity_log_tool(error: ActivityLogError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
+def _note_response(record: NoteRecord) -> NoteResponse:
+    return NoteResponse(
+        id=record.id,
+        title=record.title,
+        body=record.body,
+        journal_date=record.journal_date,
+        tags=record.tags,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        deleted_at=record.deleted_at,
+    )
+
+
+def _raise_note_tool(error: NoteError) -> None:
     raise ToolError(f"{error.code}: {error.message}") from error
 
 
@@ -366,6 +395,106 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         except TaskError as exc:
             _raise_tool(exc)
         return _series_response(record)
+
+    @server.tool(name="create_note")
+    async def create_note_tool(payload: NoteCreateRequest, ctx: Context) -> NoteResponse:
+        """Create an owner-scoped Markdown note."""
+
+        del ctx
+        try:
+            record = await create_note(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                payload,
+            )
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return _note_response(record)
+
+    @server.tool(name="list_notes")
+    async def list_notes_tool(
+        tag: list[str] | None = None,
+        search: str | None = None,
+        journal_date_from: date | None = None,
+        journal_date_to: date | None = None,
+        include_deleted: bool = False,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> NoteListResponse:
+        """List owner-scoped notes with bounded cursor pagination."""
+
+        del ctx
+        try:
+            page = await list_notes(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                NoteListFilters(
+                    tags=tuple(tag or ()),
+                    search=search,
+                    journal_date_from=journal_date_from,
+                    journal_date_to=journal_date_to,
+                    include_deleted=include_deleted,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return NoteListResponse(
+            items=[_note_response(record) for record in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_note")
+    async def get_note_tool(note_id: str, ctx: Context) -> NoteResponse:
+        """Return one active owner-scoped note."""
+
+        del ctx
+        try:
+            record = await get_note(database_storage(storage), get_mcp_auth().user.id, note_id)
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return _note_response(record)
+
+    @server.tool(name="update_note")
+    async def update_note_tool(
+        note_id: str,
+        payload: NoteUpdateRequest,
+        ctx: Context,
+    ) -> NoteResponse:
+        """Apply a partial update to one active owner-scoped note."""
+
+        del ctx
+        try:
+            record = await update_note(
+                database_storage(storage), get_mcp_auth().user.id, note_id, payload
+            )
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return _note_response(record)
+
+    @server.tool(name="delete_note")
+    async def delete_note_tool(note_id: str, ctx: Context) -> str:
+        """Soft-delete one active owner-scoped note."""
+
+        del ctx
+        try:
+            await delete_note(database_storage(storage), get_mcp_auth().user.id, note_id)
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return "Note deleted."
+
+    @server.tool(name="restore_note")
+    async def restore_note_tool(note_id: str, ctx: Context) -> NoteResponse:
+        """Restore one owner-scoped note."""
+
+        del ctx
+        try:
+            record = await restore_note(database_storage(storage), get_mcp_auth().user.id, note_id)
+        except NoteError as exc:
+            _raise_note_tool(exc)
+        return _note_response(record)
 
     @server.tool(name="append_activity_log")
     async def append_activity_log_tool(

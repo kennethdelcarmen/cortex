@@ -79,14 +79,24 @@ The initial service exposes:
   and password-change operations.
 - `/api/v1/activity-logs` for authenticated activity-log append and history
   queries with filtering and cursor pagination.
+- `/api/v1/notes` for authenticated Markdown note and journal-entry CRUD,
+  normalized tags, local full-text search, cursor pagination, soft deletion,
+  and restoration.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task and activity-log operations to agents. MCP clients send the existing
+  task, note, and activity-log operations to agents. MCP clients send the existing
   session token as a bearer token in the `Authorization` header.
 
 Activity records are append-only, owner-scoped, and support bounded listing
 with structured JSON metadata. Automatic task/auth event producers remain
 deferred.
+
+Notes store Markdown bodies, optional titles, optional date-only journal dates,
+and owner-scoped normalized tags. Note search uses the local SQLite FTS5
+extension and treats the `search` parameter as plain keywords with AND
+semantics; raw FTS operators are not part of the API contract. Normal note
+reads hide soft-deleted records, while `include_deleted=true` and the restore
+operation support recovery.
 
 Tasks use the statuses `backlog`, `todo`, `in_progress`, `done`, and `canceled`
 and the priorities `none`, `low`, `medium`, and `high`. Task tags are supplied
@@ -119,11 +129,11 @@ uv run mypy src
 ```
 
 The backend now has a persistent SQLite storage foundation, versioned auth,
-task, recurrence, and activity-log schemas, local-owner authentication, and the
-first shared REST/MCP domain slice. Knowledge, finance, and self-hosting
+task, recurrence, activity-log, and notes schemas, local-owner authentication,
+and shared REST/MCP domain slices. Knowledge, finance, and self-hosting
 packaging remain deferred. To roll back the application after the additive task,
-recurrence, and activity-log migrations, deploy the previous application while
-leaving the new tables in place. Only run a downgrade against a backed-up local
-database when intentionally removing the recurrence or activity-log schema.
+recurrence, activity-log, and notes migrations, deploy the previous application
+while leaving the new tables in place. Only run a downgrade against a backed-up
+local database when intentionally removing these schemas.
 Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
-removing the task and activity schemas together.
+removing the task, recurrence, activity-log, and notes schemas together.
