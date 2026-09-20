@@ -38,20 +38,25 @@ export type TaskFormValues = {
 type TaskCreateDialogProps = {
   open: boolean;
   isSaving: boolean;
+  initialStartAt?: TaskDateTimeValue;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: TaskFormValues) => void;
 };
 
-function defaultFormValues(): TaskFormValues {
+function defaultFormValues(initialStartAt?: TaskDateTimeValue): TaskFormValues {
   const today = currentLocalDateInput();
+  const startAt = initialStartAt ?? { date: today, time: "" };
+  const dueAt = initialStartAt
+    ? dueDateTimeAfterStart(startAt) ?? { date: startAt.date, time: "" }
+    : { date: today, time: "" };
 
   return {
     title: "",
     description: "",
     status: "backlog",
     priority: "none",
-    startAt: { date: today, time: "" },
-    dueAt: { date: today, time: "" },
+    startAt,
+    dueAt,
     tags: "",
   };
 }
@@ -59,10 +64,11 @@ function defaultFormValues(): TaskFormValues {
 export function TaskCreateDialog({
   open,
   isSaving,
+  initialStartAt,
   onOpenChange,
   onSubmit,
 }: TaskCreateDialogProps) {
-  const [values, setValues] = useState<TaskFormValues>(defaultFormValues);
+  const [values, setValues] = useState<TaskFormValues>(() => defaultFormValues(initialStartAt));
   const [formError, setFormError] = useState<string>();
 
   function updateValue<Key extends keyof TaskFormValues>(

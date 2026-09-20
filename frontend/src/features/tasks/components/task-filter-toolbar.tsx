@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -90,7 +89,7 @@ function TagFilter({
       <PopoverContent align="end" className="w-72 p-3">
         <PopoverHeader>
           <PopoverTitle>Filter by tags</PopoverTitle>
-          <PopoverDescription>Select any tags to match.</PopoverDescription>
+          <PopoverDescription>Choose one tag to match.</PopoverDescription>
         </PopoverHeader>
         <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
           {isSummaryPending && !summary ? (
@@ -104,10 +103,13 @@ function TagFilter({
                   key={tag.name}
                   className="flex min-h-10 cursor-pointer items-center gap-3 rounded-md px-2 hover:bg-muted/60"
                 >
-                  <Checkbox
+                  <input
+                    type="radio"
+                    name="task-tag-filter"
                     checked={checked}
-                    onCheckedChange={() => onTagToggle(tag.name)}
+                    onChange={() => onTagToggle(tag.name)}
                     aria-label={`Filter by ${tag.name}`}
+                    className="size-4 accent-primary"
                   />
                   <span className="min-w-0 flex-1 truncate text-sm">#{tag.name}</span>
                   <span className="font-mono text-xs text-muted-foreground">{tag.count}</span>
@@ -120,7 +122,7 @@ function TagFilter({
         </div>
         {state.tags.length ? (
           <Button type="button" variant="ghost" size="sm" className="mt-2 w-full" onClick={onTagsClear}>
-            Clear tag filters
+            Clear tag filter
           </Button>
         ) : null}
       </PopoverContent>

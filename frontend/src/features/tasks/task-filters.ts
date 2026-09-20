@@ -10,9 +10,13 @@ export const TASK_VIEWS = [
   "custom",
 ] as const;
 
+export const TASK_LAYOUTS = ["list", "calendar"] as const;
+
 export type TaskView = (typeof TASK_VIEWS)[number];
+export type TaskLayout = (typeof TASK_LAYOUTS)[number];
 
 export type TaskUrlState = {
+  layout: TaskLayout;
   view: TaskView;
   search: string;
   tags: string[];
@@ -21,6 +25,7 @@ export type TaskUrlState = {
 };
 
 const taskViewSet = new Set<string>(TASK_VIEWS);
+const taskLayoutSet = new Set<string>(TASK_LAYOUTS);
 const localDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
 function validLocalDate(value: string | null) {
@@ -46,25 +51,26 @@ function validLocalDate(value: string | null) {
 export function parseTaskUrlState(params: URLSearchParams): TaskUrlState {
   const rawView = params.get("view");
   const candidateView = rawView && taskViewSet.has(rawView) ? rawView : "all";
+  const rawLayout = params.get("layout");
+  const layout = rawLayout && taskLayoutSet.has(rawLayout)
+    ? rawLayout as TaskLayout
+    : "list";
   const from = validLocalDate(params.get("from"));
   const to = validLocalDate(params.get("to"));
   const customRangeIsValid = Boolean(from && to && from <= to);
   const view = candidateView === "custom" && !customRangeIsValid
     ? "all"
     : candidateView as TaskView;
-  const tags = Array.from(
-    new Set(
-      params
-        .getAll("tag")
-        .map((tag) => tag.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ).slice(0, 20);
+  const tag = params
+    .getAll("tag")
+    .map((value) => value.trim().toLowerCase())
+    .find(Boolean);
 
   return {
+    layout,
     view,
     search: params.get("q")?.trim().slice(0, 200) ?? "",
-    tags,
+    tags: tag ? [tag] : [],
     from,
     to,
   };
@@ -124,6 +130,14 @@ export function taskListFiltersForState(
   }
 
   return filters;
+}
+
+export function clearTaskListUrlState(params: URLSearchParams) {
+  params.delete("view");
+  params.delete("q");
+  params.delete("tag");
+  params.delete("from");
+  params.delete("to");
 }
 
 export function taskSummaryTimezone() {

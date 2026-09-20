@@ -7,7 +7,7 @@ import {
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { Clock3, Plus } from "lucide-react";
+import { CalendarDays, Clock3, ListTodo, Plus } from "lucide-react";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
+import { cn } from "@/lib/utils";
 import { useActivityLogger } from "@/features/activity/hooks";
 import {
   createTask,
@@ -40,12 +41,14 @@ import {
   type TaskStatus,
   type TaskUpdateInput,
 } from "../api";
-import { statusLabel, TASK_STATUSES } from "../utils";
+import { statusLabel, TASK_STATUSES, toLocalDateTimeParts, type TaskDateTimeValue } from "../utils";
 import {
   parseTaskUrlState,
+  clearTaskListUrlState,
   taskListFiltersForState,
   taskSummaryTimezone,
   taskViewLabel,
+  type TaskLayout,
   type TaskUrlState,
   type TaskView,
 } from "../task-filters";
@@ -56,6 +59,12 @@ import {
 } from "./task-create-dialog";
 import { TaskDetailsDrawer } from "./task-details-drawer";
 import { TaskFilterToolbar } from "./task-filter-toolbar";
+import {
+  initialTaskCalendarRange,
+  TaskCalendar,
+  type TaskCalendarCreateSelection,
+  type TaskCalendarRange,
+} from "./task-calendar";
 import { TaskList, type TaskListTab } from "./task-list";
 import { TaskViewNavigation } from "./task-view-navigation";
 import {
@@ -150,6 +159,53 @@ function TaskListSkeleton() {
   );
 }
 
+function TaskLayoutToggle({
+  layout,
+  onChange,
+}: {
+  layout: TaskLayout;
+  onChange: (layout: TaskLayout) => void;
+}) {
+  const options: Array<{
+    value: TaskLayout;
+    label: string;
+    icon: typeof ListTodo;
+  }> = [
+    { value: "list", label: "List", icon: ListTodo },
+    { value: "calendar", label: "Calendar", icon: CalendarDays },
+  ];
+
+  return (
+    <div
+      aria-label="Task layout"
+      className="inline-flex rounded-lg border border-border/80 bg-card/60 p-1"
+      role="group"
+    >
+      {options.map(({ value, label, icon: Icon }) => {
+        const selected = layout === value;
+
+        return (
+          <Button
+            key={value}
+            type="button"
+            variant={selected ? "secondary" : "ghost"}
+            size="sm"
+            aria-pressed={selected}
+            onClick={() => onChange(value)}
+            className={cn(
+              "h-8 gap-1.5 px-2.5 text-xs",
+              selected ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            <Icon aria-hidden="true" className="size-3.5" />
+            {label}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 function DeleteTaskDialog({
   task,
   open,
@@ -210,11 +266,15 @@ export function TasksPage({ email }: { email: string }) {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [timezone] = useState(() => taskSummaryTimezone());
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDialogStartAt, setCreateDialogStartAt] = useState<TaskDateTimeValue>();
   const [detailsTaskId, setDetailsTaskId] = useState<string | null>(null);
   const [detailsDrawerOpen, setDetailsDrawerOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Task | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
+  const [calendarRange, setCalendarRange] = useState<TaskCalendarRange>(() =>
+    initialTaskCalendarRange(),
+  );
 
   const searchParamsValue = searchParams.toString();
   const urlState = useMemo<TaskUrlState>(
@@ -228,6 +288,20 @@ export function TasksPage({ email }: { email: string }) {
   const taskListQueryKey = useMemo(
     () => [...taskQueryKey, "list", taskListFilters] as const,
     [taskListFilters],
+  );
+  const calendarTaskFilters = useMemo(
+    () => ({
+      statuses: [],
+      priorities: [],
+      tags: [],
+      scheduledFrom: calendarRange.start.toISOString(),
+      scheduledTo: calendarRange.end.toISOString(),
+    }),
+    [calendarRange],
+  );
+  const calendarTaskQueryKey = useMemo(
+    () => [...taskQueryKey, "calendar", calendarTaskFilters] as const,
+    [calendarTaskFilters],
   );
 
   useEffect(() => {
@@ -247,6 +321,16 @@ export function TasksPage({ email }: { email: string }) {
       listTasks(taskListFilters, pageParam, "due"),
     initialPageParam: "",
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: urlState.layout === "list",
+  });
+
+  const calendarQuery = useInfiniteQuery({
+    queryKey: calendarTaskQueryKey,
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+      listTasks(calendarTaskFilters, pageParam, "due"),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: urlState.layout === "calendar",
   });
 
   const updateTaskUrl = useCallback(
@@ -269,6 +353,7 @@ export function TasksPage({ email }: { email: string }) {
     (view: TaskView) => {
       setSelectedTab("all");
       updateTaskUrl((params) => {
+        params.delete("layout");
         if (view === "all") {
           params.delete("view");
         } else {
@@ -283,6 +368,34 @@ export function TasksPage({ email }: { email: string }) {
     },
     [updateTaskUrl],
   );
+
+  const handleLayoutChange = useCallback(
+    (layout: TaskLayout) => {
+      setSelectedTab("all");
+      updateTaskUrl((params) => {
+        if (layout === "list") {
+          params.delete("layout");
+        } else {
+          params.set("layout", layout);
+          clearTaskListUrlState(params);
+        }
+      });
+    },
+    [updateTaskUrl],
+  );
+
+  const handleCalendarRangeChange = useCallback((range: TaskCalendarRange) => {
+    setCalendarRange((current) => {
+      if (
+        current.start.getTime() === range.start.getTime() &&
+        current.end.getTime() === range.end.getTime()
+      ) {
+        return current;
+      }
+
+      return range;
+    });
+  }, []);
 
   const handleSearchChange = useCallback(
     (value: string) => {
@@ -300,15 +413,11 @@ export function TasksPage({ email }: { email: string }) {
   const handleTagToggle = useCallback(
     (tag: string) => {
       updateTaskUrl((params) => {
-        const tags = new Set(params.getAll("tag"));
-        if (tags.has(tag)) {
-          tags.delete(tag);
-        } else {
-          tags.add(tag);
-        }
+        const selectedTag = params.get("tag")?.trim().toLowerCase();
         params.delete("tag");
-        for (const value of tags) {
-          params.append("tag", value);
+
+        if (selectedTag !== tag) {
+          params.set("tag", tag);
         }
       });
     },
@@ -341,20 +450,18 @@ export function TasksPage({ email }: { email: string }) {
   }, [updateTaskUrl]);
 
   const handleClearFilters = useCallback(() => {
-    updateTaskUrl((params) => {
-      params.delete("view");
-      params.delete("q");
-      params.delete("tag");
-      params.delete("from");
-      params.delete("to");
-    });
+    updateTaskUrl(clearTaskListUrlState);
   }, [updateTaskUrl]);
 
   const tasks = useMemo(
     () => query.data?.pages.flatMap((page) => page.items) ?? [],
     [query.data],
   );
-  const visibleTasks = tasks;
+  const calendarTasks = useMemo(
+    () => calendarQuery.data?.pages.flatMap((page) => page.items) ?? [],
+    [calendarQuery.data],
+  );
+  const visibleTasks = urlState.layout === "calendar" ? calendarTasks : tasks;
   const tabCounts = useMemo<Record<TaskListTab, number>>(() => {
     const counts: Record<TaskListTab, number> = {
       all: visibleTasks.length,
@@ -379,12 +486,20 @@ export function TasksPage({ email }: { email: string }) {
   }, [selectedTab, visibleTasks]);
 
   function getCachedTask(taskId: string) {
-    const cachedData = queryClient.getQueryData<InfiniteData<TaskListPage>>(taskListQueryKey);
-    return cachedData?.pages.flatMap((page) => page.items).find((task) => task.id === taskId);
+    for (const [, cachedData] of queryClient.getQueriesData<InfiniteData<TaskListPage>>({
+      queryKey: taskQueryKey,
+    })) {
+      const task = cachedData?.pages.flatMap((page) => page.items).find((item) => item.id === taskId);
+      if (task) {
+        return task;
+      }
+    }
+
+    return undefined;
   }
 
   function updateTaskInCache(taskId: string, updater: (task: Task) => Task) {
-    queryClient.setQueryData<InfiniteData<TaskListPage>>(taskListQueryKey, (current) => {
+    queryClient.setQueriesData<InfiniteData<TaskListPage>>({ queryKey: taskQueryKey }, (current) => {
       if (!current) {
         return current;
       }
@@ -409,6 +524,7 @@ export function TasksPage({ email }: { email: string }) {
         metadata: { title: task.title },
       });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
       setCreateDialogOpen(false);
       feedback.success({ title: "Task added to the list." });
     },
@@ -463,6 +579,7 @@ export function TasksPage({ email }: { email: string }) {
         metadata,
       });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
 
       if (variables.notify !== false) {
         feedback.success({
@@ -506,6 +623,7 @@ export function TasksPage({ email }: { email: string }) {
         metadata: { title: variables.title },
       });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
       setDeleteOpen(false);
       setPendingDelete(null);
       setDetailsDrawerOpen(false);
@@ -525,9 +643,18 @@ export function TasksPage({ email }: { email: string }) {
     },
   });
 
-  function openCreate() {
+  function openCreate(initialStartAt?: TaskDateTimeValue) {
     createMutation.reset();
+    setCreateDialogStartAt(initialStartAt);
     setCreateDialogOpen(true);
+  }
+
+  function openCreateFromCalendar({ date, allDay }: TaskCalendarCreateSelection) {
+    const localValue = toLocalDateTimeParts(date.toISOString());
+    openCreate({
+      date: localValue.date,
+      time: allDay ? "" : localValue.time,
+    });
   }
 
   function openDetails(task: Task) {
@@ -538,6 +665,7 @@ export function TasksPage({ email }: { email: string }) {
   function closeCreateDialog(open: boolean) {
     setCreateDialogOpen(open);
     if (!open) {
+      setCreateDialogStartAt(undefined);
       createMutation.reset();
     }
   }
@@ -607,8 +735,18 @@ export function TasksPage({ email }: { email: string }) {
     }
   }
 
-  const nextPageError = query.isFetchNextPageError ? query.error : null;
-  const nextPageFetch = query.fetchNextPage;
+  const isCalendarLayout = urlState.layout === "calendar";
+  const activeQueryError = isCalendarLayout ? calendarQuery.error : query.error;
+  const activeQueryHasData = isCalendarLayout ? calendarQuery.data : query.data;
+  const activeQueryPending = isCalendarLayout ? calendarQuery.isPending : query.isPending;
+  const nextPageError = isCalendarLayout
+    ? calendarQuery.isFetchNextPageError
+      ? calendarQuery.error
+      : null
+    : query.isFetchNextPageError
+      ? query.error
+      : null;
+  const nextPageFetch = isCalendarLayout ? calendarQuery.fetchNextPage : query.fetchNextPage;
 
   useEffect(() => {
     if (!nextPageError || isSessionError(nextPageError)) {
@@ -626,25 +764,29 @@ export function TasksPage({ email }: { email: string }) {
   }, [feedback, nextPageError, nextPageFetch]);
 
   const hasInitialTaskSessionError = Boolean(
-    query.isError && !query.data && isSessionError(query.error),
+    activeQueryError && !activeQueryHasData && isSessionError(activeQueryError),
   );
   const hasBlockingTaskSessionError = Boolean(
     sessionError || hasInitialTaskSessionError || (nextPageError && isSessionError(nextPageError)),
   );
   const selectedTabLabel = selectedTab === "all" ? "All" : statusLabel(selectedTab);
   const selectedViewLabel = taskViewLabel(urlState.view);
-  const pageTitle = selectedTab === "all"
-    ? selectedViewLabel
-    : `${selectedViewLabel} · ${selectedTabLabel}`;
+  const pageTitle = isCalendarLayout
+    ? "Calendar"
+    : selectedTab === "all"
+      ? selectedViewLabel
+      : `${selectedViewLabel} · ${selectedTabLabel}`;
   const hasActiveFilters = Boolean(
-    urlState.search ||
+    !isCalendarLayout && (
+      urlState.search ||
       urlState.tags.length ||
       urlState.view !== "all" ||
       urlState.from ||
-      urlState.to,
+      urlState.to
+    ),
   );
   const selectedTask = detailsTaskId
-    ? visibleTasks.find((task) => task.id === detailsTaskId) ?? null
+    ? [...visibleTasks, ...tasks, ...calendarTasks].find((task) => task.id === detailsTaskId) ?? null
     : null;
 
   return (
@@ -656,6 +798,7 @@ export function TasksPage({ email }: { email: string }) {
           summary={summaryQuery.data}
           isSummaryPending={summaryQuery.isPending}
           onViewChange={handleViewChange}
+          onCalendarChange={() => handleLayoutChange("calendar")}
           onTagToggle={handleTagToggle}
         />
       }
@@ -670,25 +813,42 @@ export function TasksPage({ email }: { email: string }) {
               {pageTitle}
             </h2>
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">
-            <span>{query.isPending ? "Loading" : `${tabCounts.all} in view`}</span>
-            <span>{tabCounts.in_progress} in motion</span>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">
+              <span>{activeQueryPending ? "Loading" : `${tabCounts.all} in view`}</span>
+              <span>{tabCounts.in_progress} in motion</span>
+            </div>
+            <TaskLayoutToggle layout={urlState.layout} onChange={handleLayoutChange} />
           </div>
         </div>
 
-        <TaskFilterToolbar
-          state={urlState}
-          summary={summaryQuery.data}
-          isSummaryPending={summaryQuery.isPending}
-          onViewChange={handleViewChange}
-          onSearchChange={handleSearchChange}
-          onTagToggle={handleTagToggle}
-          onTagsClear={handleTagsClear}
-          onCustomRangeApply={handleCustomRangeApply}
-          onCustomRangeClear={handleCustomRangeClear}
-        />
+        {!isCalendarLayout ? (
+          <TaskFilterToolbar
+            state={urlState}
+            summary={summaryQuery.data}
+            isSummaryPending={summaryQuery.isPending}
+            onViewChange={handleViewChange}
+            onSearchChange={handleSearchChange}
+            onTagToggle={handleTagToggle}
+            onTagsClear={handleTagsClear}
+            onCustomRangeApply={handleCustomRangeApply}
+            onCustomRangeClear={handleCustomRangeClear}
+          />
+        ) : null}
 
-        {query.isPending ? (
+        {isCalendarLayout ? (
+          <TaskCalendar
+            tasks={visibleTasks}
+            isPending={calendarQuery.isPending}
+            isFetching={calendarQuery.isFetching}
+            hasNextPage={Boolean(calendarQuery.hasNextPage)}
+            isFetchingNextPage={calendarQuery.isFetchingNextPage}
+            onFetchNextPage={() => void calendarQuery.fetchNextPage()}
+            onRangeChange={handleCalendarRangeChange}
+            onOpenTask={openDetails}
+            onCreateTask={openCreateFromCalendar}
+          />
+        ) : query.isPending ? (
           <TaskListSkeleton />
         ) : query.isError && !query.data ? (
           <div className="mt-4 min-h-64 rounded-xl border border-border/70 bg-card/40" aria-hidden="true" />
@@ -730,7 +890,7 @@ export function TasksPage({ email }: { email: string }) {
                   View all tasks
                 </Button>
               ) : null}
-              <Button type="button" onClick={openCreate}>
+              <Button type="button" onClick={() => openCreate()}>
                 <Plus aria-hidden="true" />
                 Add task
               </Button>
@@ -752,7 +912,7 @@ export function TasksPage({ email }: { email: string }) {
               onStatusChange={handleStatusChange}
               onPriorityChange={handlePriorityChange}
               onOpenDetails={openDetails}
-              onAddTask={openCreate}
+              onAddTask={() => openCreate()}
             />
             {query.hasNextPage ? (
               <div className="flex justify-center">
@@ -775,6 +935,7 @@ export function TasksPage({ email }: { email: string }) {
         key={createDialogOpen ? "open" : "closed"}
         open={createDialogOpen}
         isSaving={createMutation.isPending}
+        initialStartAt={createDialogStartAt}
         onOpenChange={closeCreateDialog}
         onSubmit={handleCreate}
       />
@@ -805,14 +966,14 @@ export function TasksPage({ email }: { email: string }) {
         }}
       />
       <BlockingErrorDialog
-        open={hasBlockingTaskSessionError || Boolean(query.isError && !query.data)}
+        open={hasBlockingTaskSessionError || Boolean(activeQueryError && !activeQueryHasData)}
         title={hasBlockingTaskSessionError ? "Your session has ended." : "Tasks could not load."}
         description={
           sessionError ??
           (nextPageError
             ? describeTaskError(nextPageError)
-            : query.error
-              ? describeTaskError(query.error)
+            : activeQueryError
+              ? describeTaskError(activeQueryError)
               : "The task list could not be loaded.")
         }
         action={
@@ -823,8 +984,8 @@ export function TasksPage({ email }: { email: string }) {
               }
             : {
                 label: "Try again",
-                onClick: () => void query.refetch(),
-                pending: query.isFetching,
+                onClick: () => void (isCalendarLayout ? calendarQuery.refetch() : query.refetch()),
+                pending: isCalendarLayout ? calendarQuery.isFetching : query.isFetching,
                 pendingLabel: "Loading…",
               }
         }

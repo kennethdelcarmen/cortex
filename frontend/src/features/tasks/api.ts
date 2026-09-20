@@ -59,6 +59,8 @@ export type TaskListFilters = {
   search?: string;
   dueFrom?: string;
   dueTo?: string;
+  scheduledFrom?: string;
+  scheduledTo?: string;
 };
 
 export type TaskWriteInput = {
@@ -103,6 +105,14 @@ function buildTaskListPath(
 
   if (filters.dueTo) {
     params.set("due_to", filters.dueTo);
+  }
+
+  if (filters.scheduledFrom) {
+    params.set("scheduled_from", filters.scheduledFrom);
+  }
+
+  if (filters.scheduledTo) {
+    params.set("scheduled_to", filters.scheduledTo);
   }
 
   params.set("limit", "100");

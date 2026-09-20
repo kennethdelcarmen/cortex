@@ -216,9 +216,74 @@ async def test_task_list_filters_and_cursor_pagination(client: AsyncClient) -> N
     assert changed_filter_cursor.json()["detail"]["code"] == "invalid_task_cursor"
 
 
-async def test_task_summary_counts_views_and_tags(client: AsyncClient) -> None:
+async def test_task_list_scheduled_range_includes_overlapping_windows(client: AsyncClient) -> None:
     await setup_owner(client)
-    now = datetime.now(UTC)
+    payloads = [
+        {
+            "title": "Spans into range",
+            "start_at": "2027-01-31T09:00:00Z",
+            "due_at": "2027-02-02T17:00:00Z",
+        },
+        {
+            "title": "Starts in range",
+            "start_at": "2027-02-05T09:00:00Z",
+        },
+        {
+            "title": "Due in range",
+            "due_at": "2027-02-06T17:00:00Z",
+        },
+        {
+            "title": "Ends at range start",
+            "start_at": "2027-01-30T09:00:00Z",
+            "due_at": "2027-02-01T00:00:00Z",
+        },
+        {
+            "title": "Starts at range end",
+            "start_at": "2027-02-10T00:00:00Z",
+        },
+        {"title": "Outside range", "due_at": "2027-01-20T17:00:00Z"},
+        {"title": "Undated"},
+    ]
+    for payload in payloads:
+        response = await create_task(client, payload)
+        assert response.status_code == 201
+
+    params = {
+        "scheduled_from": "2027-02-01T00:00:00Z",
+        "scheduled_to": "2027-02-10T00:00:00Z",
+    }
+    filtered = await client.get("/api/v1/tasks", params=params)
+    assert filtered.status_code == 200
+    assert {item["title"] for item in filtered.json()["items"]} == {
+        "Spans into range",
+        "Starts in range",
+        "Due in range",
+        "Ends at range start",
+    }
+
+    first_page = await client.get(
+        "/api/v1/tasks",
+        params={**params, "limit": 2},
+    )
+    cursor = first_page.json()["next_cursor"]
+    assert cursor
+    changed_range = await client.get(
+        "/api/v1/tasks",
+        params={
+            **params,
+            "scheduled_from": "2027-02-02T00:00:00Z",
+            "limit": 2,
+            "cursor": cursor,
+        },
+    )
+    assert changed_range.status_code == 400
+    assert changed_range.json()["detail"]["code"] == "invalid_task_cursor"
+
+
+async def test_task_summary_counts_views_and_tags(client: AsyncClient, monkeypatch) -> None:
+    await setup_owner(client)
+    now = datetime(2027, 1, 15, 9, 0, tzinfo=UTC)
+    monkeypatch.setattr("cortex_backend.tasks.service._utc_now", lambda: now)
     today_at_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
     tomorrow_at_noon = (now + timedelta(days=1)).replace(
         hour=12,
@@ -260,6 +325,18 @@ async def test_task_summary_counts_views_and_tags(client: AsyncClient) -> None:
             "due_at": tomorrow_at_noon.isoformat(),
             "tags": ["admin"],
         },
+        {
+            "title": "Done overdue",
+            "status": "done",
+            "due_at": (now - timedelta(days=1)).isoformat(),
+            "tags": ["admin"],
+        },
+        {
+            "title": "Canceled overdue",
+            "status": "canceled",
+            "due_at": (now - timedelta(days=2)).isoformat(),
+            "tags": ["admin"],
+        },
     ]
     created_ids: list[str] = []
     for payload in payloads:
@@ -276,13 +353,13 @@ async def test_task_summary_counts_views_and_tags(client: AsyncClient) -> None:
     summary = await client.get("/api/v1/tasks/summary", params={"timezone": "UTC"})
     assert summary.status_code == 200
     assert summary.json() == {
-        "all": 4,
+        "all": 6,
         "today": 1,
         "upcoming": 1,
         "overdue": 1,
         "high_priority": 2,
         "tags": [
-            {"name": "admin", "count": 1},
+            {"name": "admin", "count": 3},
             {"name": "personal", "count": 1},
             {"name": "work", "count": 2},
         ],
@@ -380,8 +457,21 @@ async def test_mcp_task_tool_uses_the_shared_service(tmp_path, monkeypatch) -> N
             assert created.status_code == 200
             assert "Captured by MCP" in created.text
 
+            scheduled = await create_task(
+                test_client,
+                {
+                    "title": "Scheduled task",
+                    "start_at": "2027-02-05T09:00:00Z",
+                    "due_at": "2027-02-05T17:00:00Z",
+                },
+            )
+            assert scheduled.status_code == 201
+
             rest_list = await test_client.get("/api/v1/tasks")
-            assert [item["title"] for item in rest_list.json()["items"]] == ["Captured by MCP"]
+            assert {item["title"] for item in rest_list.json()["items"]} == {
+                "Captured by MCP",
+                "Scheduled task",
+            }
 
             searched = await test_client.post(
                 "/mcp/",
@@ -399,12 +489,32 @@ async def test_mcp_task_tool_uses_the_shared_service(tmp_path, monkeypatch) -> N
             assert searched.status_code == 200
             assert "Captured by MCP" in searched.text
 
-            summary = await test_client.post(
+            scheduled_list = await test_client.post(
                 "/mcp/",
                 headers=headers,
                 json={
                     "jsonrpc": "2.0",
                     "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_tasks",
+                        "arguments": {
+                            "scheduled_from": "2027-02-01T00:00:00Z",
+                            "scheduled_to": "2027-02-10T00:00:00Z",
+                        },
+                    },
+                },
+            )
+            assert scheduled_list.status_code == 200
+            assert "Scheduled task" in scheduled_list.text
+            assert "Captured by MCP" not in scheduled_list.text
+
+            summary = await test_client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 5,
                     "method": "tools/call",
                     "params": {
                         "name": "get_task_summary",
@@ -413,4 +523,4 @@ async def test_mcp_task_tool_uses_the_shared_service(tmp_path, monkeypatch) -> N
                 },
             )
             assert summary.status_code == 200
-            assert '"all":1' in summary.text.replace(" ", "")
+            assert '"all":2' in summary.text.replace(" ", "")

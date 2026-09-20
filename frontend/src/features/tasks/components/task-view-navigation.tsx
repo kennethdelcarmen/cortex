@@ -16,6 +16,7 @@ type TaskViewNavigationProps = {
   summary?: TaskSummary;
   isSummaryPending: boolean;
   onViewChange: (view: TaskView) => void;
+  onCalendarChange: () => void;
   onTagToggle: (tag: string) => void;
 };
 
@@ -76,11 +77,19 @@ export function TaskViewNavigation({
   summary,
   isSummaryPending,
   onViewChange,
+  onCalendarChange,
   onTagToggle,
 }: TaskViewNavigationProps) {
   return (
     <div className="mt-4 border-l border-border/70 pl-2">
-      <p className="px-2.5 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground">
+      <NavigationButton
+        label="Calendar"
+        selected={state.layout === "calendar"}
+        icon={CalendarDays}
+        onClick={onCalendarChange}
+      />
+
+      <p className="mt-5 px-2.5 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground">
         Focus views
       </p>
       <div className="mt-2 space-y-0.5">
@@ -89,7 +98,7 @@ export function TaskViewNavigation({
             key={value}
             label={taskViewLabel(value)}
             count={countForView(summary, value)}
-            selected={state.view === value}
+            selected={state.layout === "list" && state.view === value}
             icon={icon}
             onClick={() => onViewChange(value)}
           />
@@ -97,14 +106,14 @@ export function TaskViewNavigation({
         {state.view === "custom" ? (
           <NavigationButton
             label={formatTaskDateRange(state.from, state.to)}
-            selected
+            selected={state.layout === "list"}
             icon={CalendarDays}
             onClick={() => onViewChange("custom")}
           />
         ) : null}
       </div>
 
-      <div className="mt-5">
+      {state.layout === "list" ? <div className="mt-5">
         <p className="flex items-center gap-2 px-2.5 font-mono text-[0.6rem] uppercase tracking-[0.16em] text-muted-foreground">
           <Tag aria-hidden="true" className="size-3" />
           Tags
@@ -143,7 +152,7 @@ export function TaskViewNavigation({
             <p className="px-2.5 text-xs text-muted-foreground">No tags yet</p>
           )}
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }

@@ -61,6 +61,8 @@ class TaskListFilters:
     search: str | None = None
     due_from: datetime | None = None
     due_to: datetime | None = None
+    scheduled_from: datetime | None = None
+    scheduled_to: datetime | None = None
     limit: int = 50
     cursor: str | None = None
     order: TaskListOrder = TaskListOrder.DUE
@@ -313,6 +315,8 @@ def _filter_fingerprint(filters: TaskListFilters) -> str:
         "search": normalize_search(filters.search),
         "due_from": filters.due_from.isoformat() if filters.due_from else None,
         "due_to": filters.due_to.isoformat() if filters.due_to else None,
+        "scheduled_from": (filters.scheduled_from.isoformat() if filters.scheduled_from else None),
+        "scheduled_to": filters.scheduled_to.isoformat() if filters.scheduled_to else None,
     }
     if filters.order != TaskListOrder.DUE:
         payload["order"] = filters.order.value
@@ -399,7 +403,11 @@ async def list_tasks(
         raise InvalidTaskQueryError()
     due_from = _normalized_input_datetime(filters.due_from)
     due_to = _normalized_input_datetime(filters.due_to)
-    if due_from is not None and due_to is not None and due_from > due_to:
+    scheduled_from = _normalized_input_datetime(filters.scheduled_from)
+    scheduled_to = _normalized_input_datetime(filters.scheduled_to)
+    if (due_from is not None and due_to is not None and due_from > due_to) or (
+        scheduled_from is not None and scheduled_to is not None and scheduled_from > scheduled_to
+    ):
         raise InvalidTaskDatesError()
 
     normalized_tags = normalize_tag_names(filters.tags)
@@ -410,6 +418,8 @@ async def list_tasks(
         search=normalize_search(filters.search),
         due_from=due_from,
         due_to=due_to,
+        scheduled_from=scheduled_from,
+        scheduled_to=scheduled_to,
         limit=filters.limit,
         cursor=filters.cursor,
         order=filters.order,
@@ -450,6 +460,16 @@ async def list_tasks(
             stmt = stmt.where(Task.due_at >= normalized_filters.due_from)
         if normalized_filters.due_to is not None:
             stmt = stmt.where(Task.due_at < normalized_filters.due_to)
+        if (
+            normalized_filters.scheduled_from is not None
+            or normalized_filters.scheduled_to is not None
+        ):
+            scheduled_start = func.coalesce(Task.start_at, Task.due_at)
+            scheduled_end = func.coalesce(Task.due_at, Task.start_at)
+            if normalized_filters.scheduled_from is not None:
+                stmt = stmt.where(scheduled_end >= normalized_filters.scheduled_from)
+            if normalized_filters.scheduled_to is not None:
+                stmt = stmt.where(scheduled_start < normalized_filters.scheduled_to)
         for tag_name in normalized_filters.tags:
             stmt = stmt.where(
                 select(TaskTag.task_id)

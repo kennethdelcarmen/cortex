@@ -136,6 +136,210 @@
   }
 }
 
+.cortex-calendar {
+  --fc-page-bg-color: var(--card);
+  --fc-neutral-bg-color: color-mix(in oklab, var(--muted) 52%, transparent);
+  --fc-border-color: color-mix(in oklab, var(--border) 88%, transparent);
+  --fc-today-bg-color: color-mix(in oklab, var(--primary) 13%, transparent);
+  --fc-small-font-size: 0.72rem;
+}
+
+.cortex-calendar .fc {
+  min-width: 0;
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, sans-serif;
+  font-size: 0.875rem;
+}
+
+.cortex-calendar .fc .fc-toolbar {
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.cortex-calendar .fc .fc-toolbar-title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.cortex-calendar .fc .fc-button {
+  border-color: var(--border);
+  border-radius: 0.5rem;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.42rem 0.65rem;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.cortex-calendar .fc .fc-button:hover,
+.cortex-calendar .fc .fc-button:focus-visible {
+  border-color: color-mix(in oklab, var(--primary-strong) 55%, var(--border));
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.cortex-calendar .fc .fc-button:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 45%, transparent);
+  outline: none;
+}
+
+.cortex-calendar .fc .fc-button-primary:not(:disabled).fc-button-active,
+.cortex-calendar .fc .fc-button-primary:not(:disabled):active {
+  border-color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 22%, var(--background));
+  color: var(--foreground);
+}
+
+.cortex-calendar .fc .fc-col-header-cell-cushion,
+.cortex-calendar .fc .fc-daygrid-day-number {
+  color: var(--muted-foreground);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cortex-calendar .fc .fc-daygrid-day-number {
+  padding: 0.5rem;
+  text-transform: none;
+}
+
+.cortex-calendar .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
+  color: var(--primary-strong);
+  font-weight: 700;
+}
+
+.cortex-calendar .fc .fc-daygrid-day-frame {
+  min-height: 7.25rem;
+}
+
+.cortex-calendar .cortex-calendar__create-target {
+  cursor: pointer;
+}
+
+.cortex-calendar .cortex-calendar__create-target:hover {
+  background: color-mix(in oklab, var(--primary) 6%, transparent);
+}
+
+.cortex-calendar .cortex-calendar__create-target:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.cortex-calendar .fc .fc-timegrid-slot-label-cushion,
+.cortex-calendar .fc .fc-timegrid-axis-cushion {
+  color: var(--muted-foreground);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.65rem;
+}
+
+.cortex-calendar .fc .fc-timegrid-now-indicator-line {
+  border-color: var(--destructive);
+}
+
+.cortex-calendar .fc .fc-timegrid-now-indicator-arrow {
+  border-color: var(--destructive);
+}
+
+.cortex-calendar .fc .fc-event {
+  border: 0;
+  border-left: 3px solid var(--task-event-color);
+  border-radius: 0.35rem;
+  background: color-mix(in oklab, var(--task-event-color) 16%, var(--card));
+  color: var(--foreground);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.cortex-calendar .fc .fc-event:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 45%, transparent);
+  outline: none;
+}
+
+.cortex-calendar .fc .fc-event-main {
+  color: inherit;
+  padding: 0.22rem 0.35rem;
+}
+
+.cortex-task-event__content {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.3rem;
+  line-height: 1.25;
+}
+
+.cortex-task-event__time {
+  flex: 0 0 auto;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.64rem;
+  opacity: 0.75;
+}
+
+.cortex-task-event__title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cortex-task-event--backlog {
+  --task-event-color: var(--muted-foreground);
+}
+
+.cortex-task-event--todo {
+  --task-event-color: var(--chart-4);
+}
+
+.cortex-task-event--in_progress {
+  --task-event-color: var(--chart-3);
+}
+
+.cortex-task-event--done {
+  --task-event-color: var(--chart-2);
+}
+
+.cortex-task-event--canceled {
+  --task-event-color: var(--destructive);
+}
+
+.cortex-task-tooltip__content {
+  max-width: min(18rem, calc(100vw - 1rem));
+  padding: 0;
+}
+
+.cortex-task-tooltip {
+  width: min(18rem, calc(100vw - 1rem));
+  padding: 0.75rem;
+}
+
+.cortex-task-tooltip svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+@media (max-width: 639px) {
+  .cortex-calendar .fc .fc-toolbar > * {
+    flex: 1 1 auto;
+  }
+
+  .cortex-calendar .fc .fc-toolbar-title {
+    font-size: 0.95rem;
+  }
+
+  .cortex-calendar .fc .fc-daygrid-day-frame {
+    min-height: 5.5rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
