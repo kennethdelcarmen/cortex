@@ -57,3 +57,39 @@ class InvalidTaskSummaryTimezoneError(TaskError):
     status_code = 422
     code = "invalid_task_summary_timezone"
     message = "The task summary timezone is invalid."
+
+
+class InvalidTaskRecurrenceError(TaskError):
+    status_code = 422
+    code = "invalid_task_recurrence"
+    message = "The recurrence definition is invalid."
+
+
+class InvalidTaskRecurrenceTimezoneError(TaskError):
+    status_code = 422
+    code = "invalid_task_recurrence_timezone"
+    message = "The recurrence timezone is invalid."
+
+
+class RecurrenceAnchorRequiredError(TaskError):
+    status_code = 422
+    code = "recurrence_anchor_required"
+    message = "A recurring task requires a start time or due time."
+
+
+class TaskSeriesNotFoundError(TaskError):
+    status_code = 404
+    code = "task_series_not_found"
+    message = "The task series was not found."
+
+
+class InvalidTaskSeriesStateError(TaskError):
+    status_code = 409
+    code = "invalid_task_series_state"
+    message = "The task series cannot perform that operation in its current state."
+
+
+class TaskOccurrenceRequiredError(TaskError):
+    status_code = 422
+    code = "task_occurrence_required"
+    message = "This operation is only valid for a recurring task occurrence."

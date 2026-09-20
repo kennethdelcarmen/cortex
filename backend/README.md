@@ -94,6 +94,21 @@ inline, normalized per owner, and replaced atomically on update. `start_at` and
 `due_at` must be timezone-aware ISO datetimes. Deletes are soft deletes and
 excluded from normal task reads.
 
+Recurring tasks use an owner-scoped series with materialized task occurrences.
+Create one by adding a `recurrence` object to `POST /api/v1/tasks`; supported
+frequencies are `daily`, `weekly`, `monthly`, and `yearly`. The recurrence
+object stores an IANA timezone, interval, applicable weekday/month selectors,
+and either an inclusive `until_date` or `occurrence_count`. A recurring task
+must have a timezone-aware `start_at` or `due_at` anchor. Future occurrences
+are generated lazily through a 90-day horizon, with bounded backfill when the
+service has been offline. Existing occurrences can be edited independently;
+series edits update only future, non-exception occurrences.
+
+Series can be inspected and managed through `/api/v1/task-series` and the
+matching MCP tools. Pausing or ending a series stops new generation but leaves
+already-materialized occurrences intact. `POST /api/v1/tasks/{task_id}/skip`
+retains a skipped occurrence as a canceled task for history.
+
 ## Verification
 
 ```bash
@@ -104,11 +119,11 @@ uv run mypy src
 ```
 
 The backend now has a persistent SQLite storage foundation, versioned auth,
-task, and activity-log schemas, local-owner authentication, and the first shared
-REST/MCP domain slice. Knowledge, finance, and self-hosting packaging remain
-deferred. To roll back the application after the additive task and activity-log
-migrations, deploy the previous application while leaving the new tables in
-place. Only run `uv run alembic downgrade 0003_task_positions` against a
-backed-up local database when intentionally removing the activity-log schema.
+task, recurrence, and activity-log schemas, local-owner authentication, and the
+first shared REST/MCP domain slice. Knowledge, finance, and self-hosting
+packaging remain deferred. To roll back the application after the additive task,
+recurrence, and activity-log migrations, deploy the previous application while
+leaving the new tables in place. Only run a downgrade against a backed-up local
+database when intentionally removing the recurrence or activity-log schema.
 Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
 removing the task and activity schemas together.

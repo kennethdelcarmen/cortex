@@ -78,7 +78,39 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "created_at",
             "updated_at",
             "deleted_at",
+            "series_id",
+            "occurrence_key",
+            "series_exception",
+            "skipped_at",
         }
+        task_series_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(task_series)")
+        }
+        assert task_series_columns == {
+            "id",
+            "user_id",
+            "title",
+            "description",
+            "status",
+            "priority",
+            "timezone",
+            "anchor_at",
+            "anchor_kind",
+            "duration_seconds",
+            "rule",
+            "until_date",
+            "occurrence_count",
+            "state",
+            "materialized_through_at",
+            "created_at",
+            "updated_at",
+            "paused_at",
+            "ended_at",
+        }
+        task_series_tag_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(task_series_tags)")
+        }
+        assert task_series_tag_columns == {"series_id", "tag_id"}
         assert tag_columns == {"id", "user_id", "name", "created_at"}
         assert task_tag_columns == {"task_id", "tag_id"}
         activity_log_columns = {
@@ -115,6 +147,9 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_activity_logs_user_created",
             "ix_activity_logs_user_event_created",
             "ix_activity_logs_user_entity_created",
+            "ix_task_series_owner_state_updated",
+            "ix_tasks_owner_series_occurrence",
+            "ix_task_series_tags_tag_id",
         } <= indexes
 
 
@@ -125,7 +160,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0004_activity_logs",
+            "0005_task_recurrencies",
         )
 
 
@@ -154,7 +189,17 @@ def test_tasks_migration_downgrade_removes_task_schema(tmp_path, monkeypatch) ->
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         assert {"users", "sessions"} <= tables
-        assert not {"tasks", "tags", "task_tags", "activity_logs"} & tables
+        assert (
+            not {
+                "tasks",
+                "tags",
+                "task_tags",
+                "activity_logs",
+                "task_series",
+                "task_series_tags",
+            }
+            & tables
+        )
 
 
 def test_activity_logs_migration_downgrade_removes_only_activity_schema(

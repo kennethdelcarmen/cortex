@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TaskStatus(StrEnum):
@@ -28,6 +28,29 @@ class TaskListOrder(StrEnum):
     BOARD = "board"
 
 
+class RecurrenceFrequency(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+class RecurrenceState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ENDED = "ended"
+
+
+class RecurrenceWeekday(StrEnum):
+    MONDAY = "monday"
+    TUESDAY = "tuesday"
+    WEDNESDAY = "wednesday"
+    THURSDAY = "thursday"
+    FRIDAY = "friday"
+    SATURDAY = "saturday"
+    SUNDAY = "sunday"
+
+
 def _validate_aware_datetime(value: datetime | None) -> datetime | None:
     if value is not None and value.utcoffset() is None:
         raise ValueError("datetime must include a timezone")
@@ -46,6 +69,45 @@ def _validate_tag_names(value: list[str] | None) -> list[str] | None:
     return [tag.strip() for tag in value]
 
 
+class TaskRecurrenceRequest(BaseModel):
+    """A bounded calendar recurrence definition."""
+
+    timezone: str = Field(min_length=1, max_length=64)
+    frequency: RecurrenceFrequency
+    interval: int = Field(default=1, ge=1, le=365)
+    weekdays: list[RecurrenceWeekday] = Field(default_factory=list, max_length=7)
+    month_day: int | None = Field(default=None, ge=1, le=31)
+    month: int | None = Field(default=None, ge=1, le=12)
+    day: int | None = Field(default=None, ge=1, le=31)
+    until_date: date | None = None
+    occurrence_count: int | None = Field(default=None, ge=1, le=100_000)
+
+    @field_validator("timezone")
+    @classmethod
+    def timezone_must_have_content(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_selectors(self) -> TaskRecurrenceRequest:
+        if len(set(self.weekdays)) != len(self.weekdays):
+            raise ValueError("weekly recurrence weekdays must be unique")
+        if self.frequency == RecurrenceFrequency.WEEKLY and not self.weekdays:
+            raise ValueError("weekly recurrence requires at least one weekday")
+        if self.frequency != RecurrenceFrequency.WEEKLY and self.weekdays:
+            raise ValueError("weekdays are only valid for weekly recurrence")
+        if self.frequency != RecurrenceFrequency.MONTHLY and self.month_day is not None:
+            raise ValueError("month_day is only valid for monthly recurrence")
+        if self.frequency != RecurrenceFrequency.YEARLY and (
+            self.month is not None or self.day is not None
+        ):
+            raise ValueError("month and day are only valid for yearly recurrence")
+        if (self.month is None) != (self.day is None):
+            raise ValueError("yearly recurrence requires both month and day")
+        if self.until_date is not None and self.occurrence_count is not None:
+            raise ValueError("until_date and occurrence_count cannot both be set")
+        return self
+
+
 class TaskCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=10_000)
@@ -54,6 +116,7 @@ class TaskCreateRequest(BaseModel):
     start_at: datetime | None = None
     due_at: datetime | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
+    recurrence: TaskRecurrenceRequest | None = None
 
     @field_validator("title")
     @classmethod
@@ -116,6 +179,49 @@ class TaskResponse(BaseModel):
     tags: list[str]
     created_at: datetime
     updated_at: datetime
+    series_id: str | None
+    occurrence_key: str | None
+    series_exception: bool
+    skipped_at: datetime | None
+
+
+class TaskSeriesUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=10_000)
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
+    recurrence: TaskRecurrenceRequest | None = None
+
+    @field_validator("title")
+    @classmethod
+    def title_must_have_content(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("title must have content")
+        return value
+
+    _validate_tags = field_validator("tags")(_validate_tag_names)
+
+
+class TaskSeriesResponse(BaseModel):
+    id: str
+    state: RecurrenceState
+    title: str
+    description: str | None
+    status: TaskStatus
+    priority: TaskPriority
+    tags: list[str]
+    recurrence: TaskRecurrenceRequest
+    materialized_through_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TaskSeriesListResponse(BaseModel):
+    items: list[TaskSeriesResponse]
 
 
 class TaskListResponse(BaseModel):

@@ -12,6 +12,7 @@ from pydantic import SecretStr
 
 from cortex_backend.app import create_app
 from cortex_backend.config import Settings
+from cortex_backend.tasks.recurrence import iter_occurrences
 
 
 def migrate(database_path: Path, monkeypatch) -> None:
@@ -524,3 +525,209 @@ async def test_mcp_task_tool_uses_the_shared_service(tmp_path, monkeypatch) -> N
             )
             assert summary.status_code == 200
             assert '"all":2' in summary.text.replace(" ", "")
+
+            recurring_due = datetime.now(UTC) + timedelta(days=1)
+            recurring = await test_client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "create_task",
+                        "arguments": {
+                            "payload": {
+                                "title": "Recurring by MCP",
+                                "due_at": recurring_due.isoformat(),
+                                "recurrence": {
+                                    "timezone": "UTC",
+                                    "frequency": "daily",
+                                },
+                            }
+                        },
+                    },
+                },
+            )
+            assert recurring.status_code == 200
+            assert "Recurring by MCP" in recurring.text
+
+            series_list = await test_client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "list_task_series",
+                        "arguments": {},
+                    },
+                },
+            )
+            assert series_list.status_code == 200
+            assert "Recurring by MCP" in series_list.text
+
+
+async def test_recurring_task_materializes_idempotently_and_supports_series_actions(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    await setup_owner(client)
+    now = datetime(2027, 1, 1, 9, 0, tzinfo=UTC)
+    monkeypatch.setattr("cortex_backend.tasks.service._utc_now", lambda: now)
+
+    created = await create_task(
+        client,
+        {
+            "title": "Daily review",
+            "status": "todo",
+            "priority": "medium",
+            "due_at": now.isoformat(),
+            "tags": ["routine"],
+            "recurrence": {
+                "timezone": "UTC",
+                "frequency": "daily",
+                "interval": 1,
+            },
+        },
+    )
+    assert created.status_code == 201
+    first = created.json()
+    assert first["series_id"]
+    assert first["occurrence_key"].startswith("2027-01-01T09:00:00")
+    assert first["series_exception"] is False
+
+    listed = await client.get("/api/v1/tasks", params={"limit": 100})
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert len(items) >= 90
+    assert len({item["occurrence_key"] for item in items}) == len(items)
+    assert items[0]["tags"] == ["routine"]
+
+    repeated = await client.get("/api/v1/tasks", params={"limit": 100})
+    assert len(repeated.json()["items"]) == len(items)
+
+    series_response = await client.get(f"/api/v1/task-series/{first['series_id']}")
+    assert series_response.status_code == 200
+    assert series_response.json()["recurrence"]["frequency"] == "daily"
+
+    one_off = items[1]
+    updated_occurrence = await client.patch(
+        f"/api/v1/tasks/{one_off['id']}",
+        headers=await csrf_headers(client),
+        json={"title": "One-off review"},
+    )
+    assert updated_occurrence.status_code == 200
+    assert updated_occurrence.json()["series_exception"] is True
+
+    updated_series = await client.patch(
+        f"/api/v1/task-series/{first['series_id']}",
+        headers=await csrf_headers(client),
+        json={"title": "Updated daily review"},
+    )
+    assert updated_series.status_code == 200
+
+    unchanged_exception = await client.get(f"/api/v1/tasks/{one_off['id']}")
+    assert unchanged_exception.json()["title"] == "One-off review"
+    propagated = await client.get(f"/api/v1/tasks/{items[2]['id']}")
+    assert propagated.json()["title"] == "Updated daily review"
+
+    skipped = await client.post(
+        f"/api/v1/tasks/{items[3]['id']}/skip",
+        headers=await csrf_headers(client),
+    )
+    assert skipped.status_code == 200
+    assert skipped.json()["status"] == "canceled"
+    assert skipped.json()["skipped_at"] is not None
+
+    paused = await client.post(
+        f"/api/v1/task-series/{first['series_id']}/pause",
+        headers=await csrf_headers(client),
+    )
+    assert paused.status_code == 200
+    assert paused.json()["state"] == "paused"
+    resumed = await client.post(
+        f"/api/v1/task-series/{first['series_id']}/resume",
+        headers=await csrf_headers(client),
+    )
+    assert resumed.status_code == 200
+    ended = await client.post(
+        f"/api/v1/task-series/{first['series_id']}/end",
+        headers=await csrf_headers(client),
+    )
+    assert ended.status_code == 200
+    assert ended.json()["state"] == "ended"
+
+
+async def test_recurring_task_requires_anchor_and_valid_timezone(client: AsyncClient) -> None:
+    await setup_owner(client)
+    missing_anchor = await create_task(
+        client,
+        {
+            "title": "Missing anchor",
+            "recurrence": {
+                "timezone": "UTC",
+                "frequency": "daily",
+            },
+        },
+    )
+    assert missing_anchor.status_code == 422
+    assert missing_anchor.json()["detail"]["code"] == "recurrence_anchor_required"
+
+    invalid_timezone = await create_task(
+        client,
+        {
+            "title": "Invalid timezone",
+            "due_at": "2027-01-01T09:00:00Z",
+            "recurrence": {
+                "timezone": "Not/A_Timezone",
+                "frequency": "daily",
+            },
+        },
+    )
+    assert invalid_timezone.status_code == 422
+    assert invalid_timezone.json()["detail"]["code"] == "invalid_task_recurrence_timezone"
+
+
+def test_recurrence_generator_clamps_calendar_edges_and_preserves_dst_wall_time() -> None:
+    monthly = list(
+        iter_occurrences(
+            datetime(2027, 1, 31, 9, tzinfo=UTC),
+            "UTC",
+            {
+                "frequency": "monthly",
+                "interval": 1,
+                "weekdays": [],
+                "month_day": 31,
+                "month": None,
+                "day": None,
+                "until_date": None,
+                "occurrence_count": 3,
+            },
+        )
+    )
+    assert [item.local_at.date().isoformat() for item in monthly] == [
+        "2027-01-31",
+        "2027-02-28",
+        "2027-03-31",
+    ]
+
+    dst = list(
+        iter_occurrences(
+            datetime(2027, 3, 7, 14, tzinfo=UTC),
+            "America/New_York",
+            {
+                "frequency": "weekly",
+                "interval": 1,
+                "weekdays": ["sunday"],
+                "month_day": None,
+                "month": None,
+                "day": None,
+                "until_date": None,
+                "occurrence_count": 2,
+            },
+        )
+    )
+    assert [item.local_at.hour for item in dst] == [9, 9]
+    assert [item.utc_at.hour for item in dst] == [14, 13]

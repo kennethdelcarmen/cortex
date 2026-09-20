@@ -9,12 +9,17 @@ from ..auth.service import CurrentAuth
 from ..storage import DatabaseStorage
 from ..tasks.errors import TaskError
 from ..tasks.schemas import (
+    RecurrenceState,
     TaskCreateRequest,
     TaskListOrder,
     TaskListResponse,
     TaskPriority,
+    TaskRecurrenceRequest,
     TaskReorderRequest,
     TaskResponse,
+    TaskSeriesListResponse,
+    TaskSeriesResponse,
+    TaskSeriesUpdateRequest,
     TaskStatus,
     TaskSummaryResponse,
     TaskTagSummaryResponse,
@@ -23,13 +28,21 @@ from ..tasks.schemas import (
 from ..tasks.service import (
     TaskListFilters,
     TaskRecord,
+    TaskSeriesRecord,
     create_task,
     delete_task,
+    end_task_series,
     get_task,
+    get_task_series,
+    list_task_series,
     list_tasks,
+    pause_task_series,
     reorder_task,
+    resume_task_series,
+    skip_task_occurrence,
     summarize_tasks,
     update_task,
+    update_task_series,
 )
 from .dependencies import (
     get_current_auth,
@@ -38,6 +51,7 @@ from .dependencies import (
 )
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+series_router = APIRouter(prefix="/api/v1/task-series", tags=["task-series"])
 
 
 def _raise_http(error: TaskError) -> None:
@@ -58,6 +72,38 @@ def _response(record: TaskRecord) -> TaskResponse:
         start_at=record.start_at,
         due_at=record.due_at,
         tags=record.tags,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        series_id=record.series_id,
+        occurrence_key=record.occurrence_key,
+        series_exception=record.series_exception,
+        skipped_at=record.skipped_at,
+    )
+
+
+def _series_response(record: TaskSeriesRecord) -> TaskSeriesResponse:
+    return TaskSeriesResponse(
+        id=record.id,
+        state=RecurrenceState(record.state),
+        title=record.title,
+        description=record.description,
+        status=record.status,
+        priority=record.priority,
+        tags=record.tags,
+        recurrence=TaskRecurrenceRequest.model_validate(
+            {
+                "timezone": record.timezone,
+                "frequency": record.frequency,
+                "interval": record.interval,
+                "weekdays": record.weekdays,
+                "month_day": record.month_day,
+                "month": record.month,
+                "day": record.day,
+                "until_date": record.until_date,
+                "occurrence_count": record.occurrence_count,
+            }
+        ),
+        materialized_through_at=record.materialized_through_at,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -204,3 +250,97 @@ async def delete_task_route(
     except TaskError as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{task_id}/skip", response_model=TaskResponse)
+async def skip_task_route(
+    task_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TaskResponse:
+    """Skip and retain one recurring task occurrence."""
+
+    try:
+        record = await skip_task_occurrence(storage, auth.user.id, task_id)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _response(record)
+
+
+@series_router.get("", response_model=TaskSeriesListResponse)
+async def list_task_series_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> TaskSeriesListResponse:
+    try:
+        page = await list_task_series(storage, auth.user.id, limit)
+    except TaskError as exc:
+        _raise_http(exc)
+    return TaskSeriesListResponse(items=[_series_response(item) for item in page.items])
+
+
+@series_router.get("/{series_id}", response_model=TaskSeriesResponse)
+async def get_task_series_route(
+    series_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> TaskSeriesResponse:
+    try:
+        record = await get_task_series(storage, auth.user.id, series_id)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _series_response(record)
+
+
+@series_router.patch("/{series_id}", response_model=TaskSeriesResponse)
+async def update_task_series_route(
+    series_id: str,
+    payload: TaskSeriesUpdateRequest,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TaskSeriesResponse:
+    try:
+        record = await update_task_series(storage, auth.user.id, series_id, payload)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _series_response(record)
+
+
+@series_router.post("/{series_id}/pause", response_model=TaskSeriesResponse)
+async def pause_task_series_route(
+    series_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TaskSeriesResponse:
+    try:
+        record = await pause_task_series(storage, auth.user.id, series_id)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _series_response(record)
+
+
+@series_router.post("/{series_id}/resume", response_model=TaskSeriesResponse)
+async def resume_task_series_route(
+    series_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TaskSeriesResponse:
+    try:
+        record = await resume_task_series(storage, auth.user.id, series_id)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _series_response(record)
+
+
+@series_router.post("/{series_id}/end", response_model=TaskSeriesResponse)
+async def end_task_series_route(
+    series_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TaskSeriesResponse:
+    try:
+        record = await end_task_series(storage, auth.user.id, series_id)
+    except TaskError as exc:
+        _raise_http(exc)
+    return _series_response(record)

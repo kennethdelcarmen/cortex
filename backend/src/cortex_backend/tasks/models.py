@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
+    Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -49,6 +52,8 @@ class Task(Base):
             "created_at",
             "id",
         ),
+        UniqueConstraint("series_id", "occurrence_key", name="uq_tasks_series_occurrence"),
+        Index("ix_tasks_owner_series_occurrence", "user_id", "series_id", "occurrence_key"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -67,6 +72,65 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    series_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("task_series.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    occurrence_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    series_exception: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    skipped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TaskSeries(Base):
+    """An owner-scoped recurrence rule and template for generated tasks."""
+
+    __tablename__ = "task_series"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('active', 'paused', 'ended')",
+            name="ck_task_series_state",
+        ),
+        CheckConstraint(
+            "status IN ('backlog', 'todo', 'in_progress', 'done', 'canceled')",
+            name="ck_task_series_status",
+        ),
+        CheckConstraint(
+            "priority IN ('none', 'low', 'medium', 'high')",
+            name="ck_task_series_priority",
+        ),
+        CheckConstraint(
+            "anchor_kind IN ('start', 'due')",
+            name="ck_task_series_anchor_kind",
+        ),
+        Index("ix_task_series_owner_state_updated", "user_id", "state", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="backlog")
+    priority: Mapped[str] = mapped_column(String(8), nullable=False, default="none")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    anchor_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    anchor_kind: Mapped[str] = mapped_column(String(8), nullable=False)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rule: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    until_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    occurrence_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(8), nullable=False, default="active")
+    materialized_through_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Tag(Base):
@@ -97,6 +161,24 @@ class TaskTag(Base):
     task_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("tasks.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tag_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class TaskSeriesTag(Base):
+    """Many-to-many membership between series and owner-scoped tags."""
+
+    __tablename__ = "task_series_tags"
+    __table_args__ = (Index("ix_task_series_tags_tag_id", "tag_id"),)
+
+    series_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("task_series.id", ondelete="CASCADE"),
         primary_key=True,
     )
     tag_id: Mapped[str] = mapped_column(

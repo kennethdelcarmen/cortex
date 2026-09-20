@@ -8,11 +8,12 @@ import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -22,17 +23,32 @@ from .errors import (
     InvalidTaskDatesError,
     InvalidTaskDateTimezoneError,
     InvalidTaskQueryError,
+    InvalidTaskRecurrenceError,
     InvalidTaskReorderError,
+    InvalidTaskSeriesStateError,
     InvalidTaskSummaryTimezoneError,
     InvalidTaskTagError,
+    RecurrenceAnchorRequiredError,
     TaskNotFoundError,
+    TaskOccurrenceRequiredError,
+    TaskSeriesNotFoundError,
 )
-from .models import Tag, Task, TaskTag
+from .models import Tag, Task, TaskSeries, TaskSeriesTag, TaskTag
+from .recurrence import (
+    HORIZON_DAYS,
+    MAX_OCCURRENCES_PER_MATERIALIZATION,
+    iter_occurrences,
+    recurrence_request,
+    split_recurrence,
+    timezone_or_error,
+)
 from .schemas import (
     TaskCreateRequest,
     TaskListOrder,
     TaskPriority,
+    TaskRecurrenceRequest,
     TaskReorderRequest,
+    TaskSeriesUpdateRequest,
     TaskStatus,
     TaskUpdateRequest,
 )
@@ -51,6 +67,38 @@ class TaskRecord:
     tags: list[str]
     created_at: datetime
     updated_at: datetime
+    series_id: str | None
+    occurrence_key: str | None
+    series_exception: bool
+    skipped_at: datetime | None
+
+
+@dataclass(frozen=True)
+class TaskSeriesRecord:
+    id: str
+    state: str
+    title: str
+    description: str | None
+    status: TaskStatus
+    priority: TaskPriority
+    tags: list[str]
+    timezone: str
+    frequency: str
+    interval: int
+    weekdays: list[str]
+    month_day: int | None
+    month: int | None
+    day: int | None
+    until_date: date | None
+    occurrence_count: int | None
+    materialized_through_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class TaskSeriesPage:
+    items: list[TaskSeriesRecord]
 
 
 @dataclass(frozen=True)
@@ -169,6 +217,10 @@ def _record(task: Task, tags: list[str]) -> TaskRecord:
         tags=tags,
         created_at=_required_utc(task.created_at),
         updated_at=_required_utc(task.updated_at),
+        series_id=task.series_id,
+        occurrence_key=task.occurrence_key,
+        series_exception=task.series_exception,
+        skipped_at=_as_utc(task.skipped_at),
     )
 
 
@@ -202,6 +254,173 @@ async def _replace_tags(
             db.add(tag)
             await db.flush()
         db.add(TaskTag(task_id=task_id, tag_id=tag.id))
+    await db.flush()
+
+
+async def _series_tags_for_series(db: AsyncSession, series_id: str) -> list[str]:
+    result = await db.execute(
+        select(Tag.name)
+        .join(TaskSeriesTag, TaskSeriesTag.tag_id == Tag.id)
+        .where(TaskSeriesTag.series_id == series_id)
+        .order_by(Tag.name.asc())
+    )
+    return [name for (name,) in result.all()]
+
+
+async def _replace_series_tags(
+    db: AsyncSession,
+    series_id: str,
+    user_id: str,
+    tag_names: list[str] | tuple[str, ...],
+) -> None:
+    normalized_names = normalize_tag_names(tag_names)
+    await db.execute(delete(TaskSeriesTag).where(TaskSeriesTag.series_id == series_id))
+    for name in normalized_names:
+        tag = await db.scalar(select(Tag).where(Tag.user_id == user_id, Tag.name == name).limit(1))
+        if tag is None:
+            tag = Tag(id=str(uuid4()), user_id=user_id, name=name, created_at=_utc_now())
+            db.add(tag)
+            await db.flush()
+        db.add(TaskSeriesTag(series_id=series_id, tag_id=tag.id))
+    await db.flush()
+
+
+async def _get_series_row(db: AsyncSession, user_id: str, series_id: str) -> TaskSeries:
+    series = await db.scalar(
+        select(TaskSeries).where(TaskSeries.id == series_id, TaskSeries.user_id == user_id).limit(1)
+    )
+    if series is None:
+        raise TaskSeriesNotFoundError()
+    return series
+
+
+def _series_record(series: TaskSeries, tags: list[str]) -> TaskSeriesRecord:
+    rule = recurrence_request(series.timezone, series.rule)
+    return TaskSeriesRecord(
+        id=series.id,
+        state=series.state,
+        title=series.title,
+        description=series.description,
+        status=TaskStatus(series.status),
+        priority=TaskPriority(series.priority),
+        tags=tags,
+        timezone=rule.timezone,
+        frequency=rule.frequency.value,
+        interval=rule.interval,
+        weekdays=[weekday.value for weekday in rule.weekdays],
+        month_day=rule.month_day,
+        month=rule.month,
+        day=rule.day,
+        until_date=rule.until_date,
+        occurrence_count=rule.occurrence_count,
+        materialized_through_at=_as_utc(series.materialized_through_at),
+        created_at=_required_utc(series.created_at),
+        updated_at=_required_utc(series.updated_at),
+    )
+
+
+def _series_schedule(
+    start_at: datetime | None,
+    due_at: datetime | None,
+) -> tuple[datetime, str, int | None]:
+    if start_at is None and due_at is None:
+        raise RecurrenceAnchorRequiredError()
+    if start_at is not None and due_at is not None:
+        duration = int((due_at - start_at).total_seconds())
+        return start_at, "start", duration
+    if start_at is not None:
+        return start_at, "start", None
+    assert due_at is not None
+    return due_at, "due", None
+
+
+def _validate_recurrence_schedule(
+    payload: TaskRecurrenceRequest,
+    anchor_at: datetime,
+) -> None:
+    timezone = timezone_or_error(payload.timezone)
+    anchor_date = anchor_at.astimezone(timezone).date()
+    if payload.until_date is not None and payload.until_date < anchor_date:
+        raise InvalidTaskRecurrenceError()
+
+
+def _occurrence_window(
+    series: TaskSeries,
+    occurrence_at: datetime,
+) -> tuple[datetime | None, datetime | None]:
+    if series.anchor_kind == "start":
+        start_at = occurrence_at
+        due_at = (
+            occurrence_at + timedelta(seconds=series.duration_seconds)
+            if series.duration_seconds is not None
+            else None
+        )
+        return start_at, due_at
+    return None, occurrence_at
+
+
+async def _materialize_series(
+    db: AsyncSession,
+    series: TaskSeries,
+    now: datetime,
+) -> None:
+    """Materialize one active series through the bounded future horizon."""
+
+    if series.state != "active":
+        return
+
+    target = max(now + timedelta(days=HORIZON_DAYS), _required_utc(series.anchor_at))
+    after_at = _as_utc(series.materialized_through_at)
+    tag_rows = await db.execute(
+        select(TaskSeriesTag.tag_id).where(TaskSeriesTag.series_id == series.id)
+    )
+    tag_ids = [tag_id for (tag_id,) in tag_rows.all()]
+    generated = iter_occurrences(
+        _required_utc(series.anchor_at),
+        series.timezone,
+        series.rule,
+        after_at=after_at,
+        through_at=target,
+        limit=MAX_OCCURRENCES_PER_MATERIALIZATION,
+    )
+
+    for occurrence in generated:
+        start_at, due_at = _occurrence_window(series, occurrence.utc_at)
+        position = await _next_position(db, series.user_id, series.status)
+        task_id = str(uuid4())
+        statement = (
+            sqlite_insert(Task)
+            .values(
+                id=task_id,
+                user_id=series.user_id,
+                title=series.title,
+                description=series.description,
+                status=series.status,
+                priority=series.priority,
+                position=position,
+                start_at=start_at,
+                due_at=due_at,
+                created_at=now,
+                updated_at=now,
+                deleted_at=None,
+                series_id=series.id,
+                occurrence_key=occurrence.key,
+                series_exception=False,
+                skipped_at=None,
+            )
+            .on_conflict_do_nothing(index_elements=["series_id", "occurrence_key"])
+        )
+        result = await db.execute(statement)
+        if getattr(result, "rowcount", 0):
+            for tag_id in tag_ids:
+                await db.execute(
+                    sqlite_insert(TaskTag)
+                    .values(task_id=task_id, tag_id=tag_id)
+                    .on_conflict_do_nothing()
+                )
+        series.materialized_through_at = occurrence.utc_at
+
+    series.updated_at = now
     await db.flush()
 
 
@@ -278,6 +497,55 @@ async def create_task(
     now = _utc_now()
     async with storage.session() as db:
         async with db.begin():
+            if payload.recurrence is not None:
+                timezone_name, rule = split_recurrence(payload.recurrence)
+                timezone_or_error(timezone_name)
+                anchor_at, anchor_kind, duration_seconds = _series_schedule(start_at, due_at)
+                _validate_recurrence_schedule(payload.recurrence, anchor_at)
+                series = TaskSeries(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    title=payload.title,
+                    description=payload.description,
+                    status=payload.status.value,
+                    priority=payload.priority.value,
+                    timezone=timezone_name,
+                    anchor_at=anchor_at,
+                    anchor_kind=anchor_kind,
+                    duration_seconds=duration_seconds,
+                    rule=rule,
+                    until_date=payload.recurrence.until_date,
+                    occurrence_count=payload.recurrence.occurrence_count,
+                    state="active",
+                    materialized_through_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(series)
+                await db.flush()
+                await _replace_series_tags(db, series.id, user_id, payload.tags)
+                await _materialize_series(db, series, now)
+                first_occurrence = next(
+                    iter_occurrences(
+                        anchor_at,
+                        timezone_name,
+                        rule,
+                        limit=1,
+                    )
+                )
+                task = await db.scalar(
+                    select(Task)
+                    .where(
+                        Task.user_id == user_id,
+                        Task.series_id == series.id,
+                        Task.occurrence_key == first_occurrence.key,
+                    )
+                    .limit(1)
+                )
+                assert task is not None
+                tags = await _tags_for_tasks(db, [task.id])
+                return _record(task, tags.get(task.id, []))
+
             task = Task(
                 id=str(uuid4()),
                 user_id=user_id,
@@ -290,6 +558,10 @@ async def create_task(
                 due_at=due_at,
                 created_at=now,
                 updated_at=now,
+                series_id=None,
+                occurrence_key=None,
+                series_exception=False,
+                skipped_at=None,
             )
             db.add(task)
             await db.flush()
@@ -392,6 +664,25 @@ def _decode_board_cursor(cursor: str, fingerprint: str) -> tuple[str, int, datet
         raise InvalidCursorError() from None
 
 
+async def _materialize_active_series(
+    db: AsyncSession,
+    user_id: str,
+    now: datetime,
+) -> None:
+    series_rows = list(
+        (
+            await db.scalars(
+                select(TaskSeries).where(
+                    TaskSeries.user_id == user_id,
+                    TaskSeries.state == "active",
+                )
+            )
+        ).all()
+    )
+    for series in series_rows:
+        await _materialize_series(db, series, now)
+
+
 async def list_tasks(
     storage: DatabaseStorage,
     user_id: str,
@@ -428,6 +719,8 @@ async def list_tasks(
     order_null = case((Task.due_at.is_(None), 1), else_=0)
 
     async with storage.session() as db:
+        async with db.begin():
+            await _materialize_active_series(db, user_id, _utc_now())
         stmt = select(Task).where(Task.user_id == user_id, Task.deleted_at.is_(None))
         if normalized_filters.statuses:
             stmt = stmt.where(
@@ -615,6 +908,8 @@ async def summarize_tasks(
     ]
 
     async with storage.session() as db:
+        async with db.begin():
+            await _materialize_active_series(db, user_id, now)
         base = select(func.count(Task.id)).where(
             Task.user_id == user_id,
             Task.deleted_at.is_(None),
@@ -681,6 +976,8 @@ async def update_task(
         async with db.begin():
             task = await _get_task_row(db, user_id, task_id)
             values = payload.model_dump(exclude_unset=True)
+            if values and task.series_id is not None:
+                task.series_exception = True
             start_at = values.get("start_at", _as_utc(task.start_at))
             due_at = values.get("due_at", _as_utc(task.due_at))
             if "start_at" in values:
@@ -723,6 +1020,9 @@ async def reorder_task(
         async with db.begin():
             task = await _get_task_row(db, user_id, task_id)
             target_status = payload.status.value
+
+            if task.series_id is not None:
+                task.series_exception = True
 
             if payload.before_task_id == task.id:
                 raise InvalidTaskReorderError()
@@ -767,6 +1067,8 @@ async def delete_task(storage: DatabaseStorage, user_id: str, task_id: str) -> N
             now = _utc_now()
             task.deleted_at = now
             task.updated_at = now
+            if task.series_id is not None:
+                task.series_exception = True
             await db.flush()
             await db.execute(
                 update(Task)
@@ -778,3 +1080,240 @@ async def delete_task(storage: DatabaseStorage, user_id: str, task_id: str) -> N
                 )
                 .values(position=Task.position - 1)
             )
+
+
+async def get_task_series(
+    storage: DatabaseStorage,
+    user_id: str,
+    series_id: str,
+) -> TaskSeriesRecord:
+    """Return one owner-scoped recurrence series."""
+
+    async with storage.session() as db:
+        series = await _get_series_row(db, user_id, series_id)
+        tags = await _series_tags_for_series(db, series.id)
+        return _series_record(series, tags)
+
+
+async def list_task_series(
+    storage: DatabaseStorage,
+    user_id: str,
+    limit: int = 50,
+) -> TaskSeriesPage:
+    """Return a bounded list of owner-scoped recurrence series."""
+
+    if not 1 <= limit <= 100:
+        raise InvalidTaskQueryError()
+    async with storage.session() as db:
+        async with db.begin():
+            await _materialize_active_series(db, user_id, _utc_now())
+        series_rows = list(
+            (
+                await db.scalars(
+                    select(TaskSeries)
+                    .where(TaskSeries.user_id == user_id)
+                    .order_by(TaskSeries.updated_at.desc(), TaskSeries.id.asc())
+                    .limit(limit)
+                )
+            ).all()
+        )
+        return TaskSeriesPage(
+            items=[
+                _series_record(series, await _series_tags_for_series(db, series.id))
+                for series in series_rows
+            ]
+        )
+
+
+async def _future_series_tasks(
+    db: AsyncSession,
+    series_id: str,
+    now: datetime,
+) -> list[Task]:
+    return list(
+        (
+            await db.scalars(
+                select(Task).where(
+                    Task.series_id == series_id,
+                    Task.deleted_at.is_(None),
+                    Task.series_exception.is_(False),
+                    or_(Task.due_at >= now, Task.start_at >= now),
+                )
+            )
+        ).all()
+    )
+
+
+async def _apply_series_template(
+    db: AsyncSession,
+    series: TaskSeries,
+    tasks: list[Task],
+    tag_names: tuple[str, ...],
+    now: datetime,
+) -> None:
+    for task in tasks:
+        if task.status != series.status:
+            await _move_to_column_end(db, task, series.status)
+        task.title = series.title
+        task.description = series.description
+        task.priority = series.priority
+        task.updated_at = now
+        await _replace_tags(db, task.id, series.user_id, list(tag_names))
+
+
+async def update_task_series(
+    storage: DatabaseStorage,
+    user_id: str,
+    series_id: str,
+    payload: TaskSeriesUpdateRequest,
+) -> TaskSeriesRecord:
+    """Update a series template or rule and preserve occurrence exceptions."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            series = await _get_series_row(db, user_id, series_id)
+            if series.state == "ended":
+                raise InvalidTaskSeriesStateError()
+            now = _utc_now()
+            existing_tags = tuple(await _series_tags_for_series(db, series.id))
+            values = payload.model_dump(exclude_unset=True)
+            recurrence_changed = "recurrence" in values and payload.recurrence is not None
+
+            if payload.title is not None:
+                series.title = payload.title
+            if "description" in values:
+                series.description = payload.description
+            if payload.status is not None:
+                series.status = payload.status.value
+            if payload.priority is not None:
+                series.priority = payload.priority.value
+            tag_names = existing_tags
+            if "tags" in values and payload.tags is not None:
+                tag_names = normalize_tag_names(payload.tags)
+                await _replace_series_tags(db, series.id, user_id, list(tag_names))
+
+            future_tasks = await _future_series_tasks(db, series.id, now)
+            if recurrence_changed:
+                assert payload.recurrence is not None
+                timezone_name, rule = split_recurrence(payload.recurrence)
+                timezone_or_error(timezone_name)
+                _validate_recurrence_schedule(
+                    payload.recurrence,
+                    _required_utc(series.anchor_at),
+                )
+                series.timezone = timezone_name
+                series.rule = rule
+                series.until_date = payload.recurrence.until_date
+                series.occurrence_count = payload.recurrence.occurrence_count
+                replacement_occurrences = {
+                    occurrence.key: occurrence
+                    for occurrence in iter_occurrences(
+                        series.anchor_at,
+                        timezone_name,
+                        rule,
+                        after_at=now - timedelta(seconds=1),
+                        through_at=now + timedelta(days=HORIZON_DAYS),
+                        limit=MAX_OCCURRENCES_PER_MATERIALIZATION,
+                    )
+                }
+                applicable_tasks: list[Task] = []
+                for task in future_tasks:
+                    occurrence_key = task.occurrence_key
+                    occurrence = (
+                        replacement_occurrences.get(occurrence_key)
+                        if occurrence_key is not None
+                        else None
+                    )
+                    if occurrence is None:
+                        task.series_id = None
+                        task.occurrence_key = None
+                        task.series_exception = False
+                        continue
+                    task.start_at, task.due_at = _occurrence_window(series, occurrence.utc_at)
+                    applicable_tasks.append(task)
+                future_tasks = applicable_tasks
+                series.materialized_through_at = None
+
+            await _apply_series_template(db, series, future_tasks, tag_names, now)
+            series.updated_at = now
+            if series.state == "active":
+                await _materialize_series(db, series, now)
+            await db.flush()
+            return _series_record(series, list(tag_names))
+
+
+async def _transition_series(
+    storage: DatabaseStorage,
+    user_id: str,
+    series_id: str,
+    target_state: str,
+) -> TaskSeriesRecord:
+    async with storage.session() as db:
+        async with db.begin():
+            series = await _get_series_row(db, user_id, series_id)
+            allowed = {
+                "paused": {"active"},
+                "active": {"paused"},
+                "ended": {"active", "paused"},
+            }
+            if target_state not in allowed or series.state not in allowed[target_state]:
+                raise InvalidTaskSeriesStateError()
+            now = _utc_now()
+            series.state = target_state
+            series.updated_at = now
+            if target_state == "paused":
+                series.paused_at = now
+            elif target_state == "ended":
+                series.ended_at = now
+            elif target_state == "active":
+                series.paused_at = None
+                await _materialize_series(db, series, now)
+            await db.flush()
+            return _series_record(series, await _series_tags_for_series(db, series.id))
+
+
+async def pause_task_series(
+    storage: DatabaseStorage, user_id: str, series_id: str
+) -> TaskSeriesRecord:
+    """Pause future generation while leaving existing occurrences intact."""
+
+    return await _transition_series(storage, user_id, series_id, "paused")
+
+
+async def resume_task_series(
+    storage: DatabaseStorage, user_id: str, series_id: str
+) -> TaskSeriesRecord:
+    """Resume generation for a paused series."""
+
+    return await _transition_series(storage, user_id, series_id, "active")
+
+
+async def end_task_series(
+    storage: DatabaseStorage, user_id: str, series_id: str
+) -> TaskSeriesRecord:
+    """End future generation while preserving materialized occurrences."""
+
+    return await _transition_series(storage, user_id, series_id, "ended")
+
+
+async def skip_task_occurrence(
+    storage: DatabaseStorage,
+    user_id: str,
+    task_id: str,
+) -> TaskRecord:
+    """Cancel and retain one recurring occurrence as an explicit skip."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id)
+            if task.series_id is None:
+                raise TaskOccurrenceRequiredError()
+            await _move_to_column_end(db, task, TaskStatus.CANCELED.value)
+            now = _utc_now()
+            task.status = TaskStatus.CANCELED.value
+            task.skipped_at = now
+            task.series_exception = True
+            task.updated_at = now
+            await db.flush()
+            tags = await _tags_for_tasks(db, [task.id])
+            return _record(task, tags.get(task.id, []))
