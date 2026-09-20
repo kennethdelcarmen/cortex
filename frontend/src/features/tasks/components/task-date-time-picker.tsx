@@ -178,6 +178,7 @@ export function TaskDateTimePicker({
             </PopoverHeader>
             <Calendar
               mode="single"
+              defaultMonth={dateValueToDate(value.date)}
               selected={dateValueToDate(value.date)}
               onSelect={handleDateSelect}
               autoFocus

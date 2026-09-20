@@ -10,6 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskStatus } from "../api";
 import {
+  defaultRecurrenceValues,
+  recurrenceFormError,
+  recurrenceValuesToPayload,
+  type RecurrenceFormValues,
+} from "../recurrence";
+import {
   adjustDueDateForStart,
   localDateTimePartsToIso,
   currentLocalDateInput,
@@ -24,6 +30,7 @@ import {
 } from "../utils";
 import { TaskDateTimePicker } from "./task-date-time-picker";
 import { TaskOptionValue } from "./task-option-value";
+import { TaskRecurrenceBuilder } from "./task-recurrence-builder";
 
 export type TaskFormValues = {
   title: string;
@@ -33,6 +40,7 @@ export type TaskFormValues = {
   startAt: TaskDateTimeValue;
   dueAt: TaskDateTimeValue;
   tags: string;
+  recurrence: RecurrenceFormValues;
 };
 
 type TaskCreateDialogProps = {
@@ -58,6 +66,34 @@ function defaultFormValues(initialStartAt?: TaskDateTimeValue): TaskFormValues {
     startAt,
     dueAt,
     tags: "",
+    recurrence: defaultRecurrenceValues(startAt),
+  };
+}
+
+function sameWeekdays(left: RecurrenceFormValues["weekdays"], right: RecurrenceFormValues["weekdays"]) {
+  return left.length === right.length && left.every((weekday) => right.includes(weekday));
+}
+
+function recurrenceDefaultsForStartChange(
+  recurrence: RecurrenceFormValues,
+  previousAnchor: TaskDateTimeValue,
+  nextAnchor: TaskDateTimeValue,
+) {
+  const previousDefaults = defaultRecurrenceValues(previousAnchor);
+  const nextDefaults = defaultRecurrenceValues(nextAnchor);
+
+  return {
+    ...recurrence,
+    weekdays: sameWeekdays(recurrence.weekdays, previousDefaults.weekdays)
+      ? nextDefaults.weekdays
+      : recurrence.weekdays,
+    monthDay: recurrence.monthDay === previousDefaults.monthDay
+      ? nextDefaults.monthDay
+      : recurrence.monthDay,
+    month: recurrence.month === previousDefaults.month
+      ? nextDefaults.month
+      : recurrence.month,
+    day: recurrence.day === previousDefaults.day ? nextDefaults.day : recurrence.day,
   };
 }
 
@@ -80,11 +116,22 @@ export function TaskCreateDialog({
   }
 
   function handleStartChange(value: TaskDateTimeValue) {
-    setValues((current) => ({
-      ...current,
-      startAt: value,
-      dueAt: dueDateTimeAfterStart(value) ?? adjustDueDateForStart(value, current.dueAt),
-    }));
+    setValues((current) => {
+      const dueAt = dueDateTimeAfterStart(value) ?? adjustDueDateForStart(value, current.dueAt);
+      const previousAnchor = current.startAt.date ? current.startAt : current.dueAt;
+      const nextAnchor = value.date ? value : dueAt;
+
+      return {
+        ...current,
+        startAt: value,
+        dueAt,
+        recurrence: recurrenceDefaultsForStartChange(
+          current.recurrence,
+          previousAnchor,
+          nextAnchor,
+        ),
+      };
+    });
     setFormError(undefined);
   }
 
@@ -113,8 +160,22 @@ export function TaskCreateDialog({
       return;
     }
 
+    const recurrenceError = recurrenceFormError(
+      values.recurrence,
+      values.startAt.date ? values.startAt : values.dueAt,
+    );
+    if (recurrenceError) {
+      setFormError(recurrenceError);
+      return;
+    }
+
     onSubmit({ ...values, title });
   }
+
+  const recurrenceError = recurrenceFormError(
+    values.recurrence,
+    values.startAt.date ? values.startAt : values.dueAt,
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -232,6 +293,14 @@ export function TaskCreateDialog({
               </div>
             </div>
 
+            <TaskRecurrenceBuilder
+              values={values.recurrence}
+              anchor={values.startAt.date ? values.startAt : values.dueAt}
+              onChange={(recurrence) => updateValue("recurrence", recurrence)}
+              disabled={isSaving}
+              error={recurrenceError}
+            />
+
             <div>
               <Label htmlFor="task-create-description" className="text-sm text-foreground">
                 Description
@@ -276,7 +345,7 @@ export function TaskCreateDialog({
               Cancel
             </DialogClose>
             <Button type="submit" size="lg" disabled={isSaving} className="w-full sm:w-auto">
-              {isSaving ? "Adding…" : "Add task"}
+              {isSaving ? "Adding…" : values.recurrence.enabled ? "Add recurring task" : "Add task"}
             </Button>
           </DialogFooter>
         </form>
@@ -286,6 +355,8 @@ export function TaskCreateDialog({
 }
 
 export function formValuesToPayload(values: TaskFormValues) {
+  const recurrence = recurrenceValuesToPayload(values.recurrence);
+
   return {
     title: values.title.trim(),
     description: values.description.trim() || null,
@@ -294,5 +365,6 @@ export function formValuesToPayload(values: TaskFormValues) {
     start_at: localDateTimePartsToIso(values.startAt),
     due_at: localDateTimePartsToIso(values.dueAt),
     tags: parseTagInput(values.tags),
+    ...(recurrence ? { recurrence } : {}),
   };
 }

@@ -11,7 +11,7 @@ import type {
   EventInput,
 } from "@fullcalendar/core";
 import type { DateClickArg } from "@fullcalendar/interaction";
-import { CalendarDays, Clock3 } from "lucide-react";
+import { CalendarDays, Clock3, Repeat2, SkipForward } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -98,8 +98,11 @@ function eventContent({ event, timeText }: EventContentArg) {
   return (
     <div className="cortex-task-event__content">
       {timeText ? <span className="cortex-task-event__time">{timeText}</span> : null}
+      {task?.series_id ? <Repeat2 aria-hidden="true" className="size-3 shrink-0" /> : null}
       <span className="cortex-task-event__title">{event.title}</span>
-      <span className="sr-only">{status}, {priority}</span>
+      <span className="sr-only">
+        {status}, {priority}{task?.series_id ? ", recurring" : ""}{task?.series_exception ? ", customized occurrence" : ""}{task?.skipped_at ? ", skipped" : ""}
+      </span>
     </div>
   );
 }
@@ -107,7 +110,7 @@ function eventContent({ event, timeText }: EventContentArg) {
 function eventLabel(task: Task) {
   const status = statusLabel(task.status);
   const priority = task.priority === "none" ? "no priority" : `${task.priority} priority`;
-  return `${task.title}, ${status}, ${priority}`;
+  return `${task.title}, ${status}, ${priority}${task.series_id ? ", recurring" : ""}${task.series_exception ? ", customized occurrence" : ""}${task.skipped_at ? ", skipped" : ""}`;
 }
 
 function TaskCalendarTooltip({ task }: { task: Task }) {
@@ -132,6 +135,8 @@ function TaskCalendarTooltip({ task }: { task: Task }) {
       <div className="mt-2 space-y-1 border-t border-border/70 pt-2 font-mono text-[0.65rem] text-muted-foreground">
         {task.start_at ? <p>Starts · {formatDateTime(task.start_at)}</p> : null}
         {task.due_at ? <p>Due · {formatDateTime(task.due_at)}</p> : null}
+        {task.series_id ? <p className="inline-flex items-center gap-1.5 font-sans font-medium text-primary-strong"><Repeat2 aria-hidden="true" className="size-3.5" />Recurring</p> : null}
+        {task.skipped_at ? <p className="inline-flex items-center gap-1.5 font-sans font-medium text-destructive"><SkipForward aria-hidden="true" className="size-3.5" />Skipped</p> : null}
       </div>
     </div>
   );

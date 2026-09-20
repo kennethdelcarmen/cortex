@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Pause, Play, Repeat2, SkipForward, Square, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerTitle } from "@/components/ui/drawer";
 import { FieldError } from "@/components/ui/field";
@@ -9,7 +10,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { Task, TaskEditableField, TaskPriority, TaskStatus, TaskUpdateInput } from "../api";
+import type {
+  Task,
+  TaskEditableField,
+  TaskPriority,
+  TaskSeries,
+  TaskStatus,
+  TaskUpdateInput,
+} from "../api";
+import {
+  recurrenceSummary,
+  recurrenceValuesFromPayload,
+  recurrenceStateLabel,
+} from "../recurrence";
 import {
   adjustDueDateForStart,
   localDateTimePartsToIso,
@@ -32,6 +45,14 @@ type TaskDetailsDrawerProps = {
   onOpenChange: (open: boolean) => void;
   onSaveField: (field: TaskEditableField, payload: TaskUpdateInput) => Promise<void>;
   onDeleteRequest: () => void;
+  series: TaskSeries | null;
+  isSeriesPending?: boolean;
+  isSeriesActionPending?: boolean;
+  onEditSeries: () => void;
+  onPauseSeries: () => void;
+  onResumeSeries: () => void;
+  onEndSeries: () => void;
+  onSkipOccurrence: () => void;
 };
 
 type TaskDraft = {
@@ -120,6 +141,14 @@ export function TaskDetailsDrawer({
   onOpenChange,
   onSaveField,
   onDeleteRequest,
+  series,
+  isSeriesPending = false,
+  isSeriesActionPending = false,
+  onEditSeries,
+  onPauseSeries,
+  onResumeSeries,
+  onEndSeries,
+  onSkipOccurrence,
 }: TaskDetailsDrawerProps) {
   const [values, setValues] = useState<TaskDraft>(() => taskToDraft(task));
   const [feedback, setFeedback] = useState<Partial<Record<TaskEditableField, FieldFeedback>>>({});
@@ -404,6 +433,90 @@ export function TaskDetailsDrawer({
                     </div>
                   </div>
                 </div>
+
+                {task.series_id ? (
+                  <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby="task-details-series-heading">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Repeat2 aria-hidden="true" className="size-4 text-primary-strong" />
+                          <h3 id="task-details-series-heading" className="text-sm font-medium text-foreground">Repeats</h3>
+                        </div>
+                        <p className="mt-2 text-sm leading-5 text-foreground">
+                          {series ? recurrenceSummary(recurrenceValuesFromPayload(series.recurrence)) : "Loading recurrence…"}
+                        </p>
+                      </div>
+                      {series ? (
+                        <Badge variant="outline" className="shrink-0 border-primary/35 bg-primary/10 text-primary-strong">
+                          {recurrenceStateLabel(series.state)}
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    {task.series_exception ? (
+                      <p className="mt-3 rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+                        Customized occurrence. Series edits will not overwrite this task.
+                      </p>
+                    ) : null}
+
+                    {series ? (
+                      <div className="mt-3 space-y-1 font-mono text-[0.68rem] text-muted-foreground">
+                        <p>Time zone · {series.recurrence.timezone}</p>
+                        <p>
+                          Ends · {series.recurrence.until_date
+                            ? series.recurrence.until_date
+                            : series.recurrence.occurrence_count
+                              ? `${series.recurrence.occurrence_count} occurrences`
+                              : "Never"}
+                        </p>
+                      </div>
+                    ) : null}
+
+                    {isSeriesPending ? (
+                      <p className="mt-3 text-xs text-muted-foreground" aria-live="polite">Loading series controls…</p>
+                    ) : null}
+
+                    {series ? (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {series.state !== "ended" ? (
+                          <Button type="button" variant="outline" size="sm" onClick={onEditSeries} disabled={isSeriesActionPending}>
+                            Edit series
+                          </Button>
+                        ) : null}
+                        {series.state === "active" ? (
+                          <Button type="button" variant="outline" size="sm" onClick={onPauseSeries} disabled={isSeriesActionPending}>
+                            <Pause aria-hidden="true" />
+                            Pause series
+                          </Button>
+                        ) : null}
+                        {series.state === "paused" || series.state === "ended" ? (
+                          <Button type="button" variant="outline" size="sm" onClick={onResumeSeries} disabled={isSeriesActionPending}>
+                            <Play aria-hidden="true" />
+                            {series.state === "ended" ? "Restart series" : "Resume series"}
+                          </Button>
+                        ) : null}
+                        {series.state !== "ended" ? (
+                          <Button type="button" variant="outline" size="sm" onClick={onEndSeries} disabled={isSeriesActionPending}>
+                            <Square aria-hidden="true" />
+                            End series
+                          </Button>
+                        ) : null}
+                        {!task.skipped_at ? (
+                          <Button type="button" variant="ghost" size="sm" onClick={onSkipOccurrence} disabled={isSeriesActionPending} className="text-muted-foreground hover:text-foreground">
+                            <SkipForward aria-hidden="true" />
+                            Skip this occurrence
+                          </Button>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-destructive"><SkipForward aria-hidden="true" className="size-3.5" />Skipped</span>
+                        )}
+                      </div>
+                    ) : null}
+
+                    <p className="mt-4 text-xs leading-5 text-muted-foreground">
+                      Series edits apply to future occurrences that have not been customized. Existing occurrences remain in place.
+                    </p>
+                  </section>
+                ) : null}
 
                 <div>
                   <Label htmlFor="task-details-tags" className="text-sm font-medium text-foreground">

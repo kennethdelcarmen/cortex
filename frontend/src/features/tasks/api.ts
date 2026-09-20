@@ -11,6 +11,29 @@ export const taskStatusSchema = z.enum([
 
 export const taskPrioritySchema = z.enum(["none", "low", "medium", "high"]);
 export const taskListOrderSchema = z.enum(["due", "board"]);
+export const recurrenceFrequencySchema = z.enum(["daily", "weekly", "monthly", "yearly"]);
+export const recurrenceStateSchema = z.enum(["active", "paused", "ended"]);
+export const recurrenceWeekdaySchema = z.enum([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]);
+
+export const taskRecurrenceSchema = z.object({
+  timezone: z.string().min(1),
+  frequency: recurrenceFrequencySchema,
+  interval: z.number().int().min(1),
+  weekdays: z.array(recurrenceWeekdaySchema),
+  month_day: z.number().int().min(1).max(31).nullable(),
+  month: z.number().int().min(1).max(12).nullable(),
+  day: z.number().int().min(1).max(31).nullable(),
+  until_date: z.string().min(1).nullable(),
+  occurrence_count: z.number().int().min(1).nullable(),
+});
 
 export const taskSchema = z.object({
   id: z.string().min(1),
@@ -24,6 +47,10 @@ export const taskSchema = z.object({
   tags: z.array(z.string()),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
+  series_id: z.string().min(1).nullable(),
+  occurrence_key: z.string().min(1).nullable(),
+  series_exception: z.boolean(),
+  skipped_at: z.string().min(1).nullable(),
 });
 
 const taskListResponseSchema = z.object({
@@ -45,12 +72,48 @@ const taskSummaryResponseSchema = z.object({
   ),
 });
 
+const taskSeriesSchema = z.object({
+  id: z.string().min(1),
+  state: recurrenceStateSchema,
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  status: taskStatusSchema,
+  priority: taskPrioritySchema,
+  tags: z.array(z.string()),
+  recurrence: taskRecurrenceSchema,
+  materialized_through_at: z.string().min(1).nullable(),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+});
+
+const taskSeriesListResponseSchema = z.object({
+  items: z.array(taskSeriesSchema),
+});
+
 export type Task = z.infer<typeof taskSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type TaskPriority = z.infer<typeof taskPrioritySchema>;
 export type TaskListOrder = z.infer<typeof taskListOrderSchema>;
 export type TaskListPage = z.infer<typeof taskListResponseSchema>;
 export type TaskSummary = z.infer<typeof taskSummaryResponseSchema>;
+export type RecurrenceFrequency = z.infer<typeof recurrenceFrequencySchema>;
+export type RecurrenceState = z.infer<typeof recurrenceStateSchema>;
+export type RecurrenceWeekday = z.infer<typeof recurrenceWeekdaySchema>;
+export type TaskRecurrence = z.infer<typeof taskRecurrenceSchema>;
+export type TaskSeries = z.infer<typeof taskSeriesSchema>;
+export type TaskSeriesList = z.infer<typeof taskSeriesListResponseSchema>;
+
+export type TaskRecurrenceInput = {
+  timezone: string;
+  frequency: RecurrenceFrequency;
+  interval: number;
+  weekdays: RecurrenceWeekday[];
+  month_day: number | null;
+  month: number | null;
+  day: number | null;
+  until_date: string | null;
+  occurrence_count: number | null;
+};
 
 export type TaskListFilters = {
   statuses: TaskStatus[];
@@ -71,13 +134,15 @@ export type TaskWriteInput = {
   start_at: string | null;
   due_at: string | null;
   tags: string[];
+  recurrence?: TaskRecurrenceInput;
 };
 
-export type TaskEditableField = keyof TaskWriteInput;
-export type TaskUpdateInput = Partial<TaskWriteInput>;
+export type TaskEditableField = Exclude<keyof TaskWriteInput, "recurrence">;
+export type TaskUpdateInput = Partial<Omit<TaskWriteInput, "recurrence">>;
 
 export const taskQueryKey = ["tasks"] as const;
 export const taskSummaryQueryKey = ["task-summary"] as const;
+export const taskSeriesQueryKey = ["task-series"] as const;
 
 function appendValues(params: URLSearchParams, key: string, values: string[]) {
   for (const value of values) {
@@ -173,4 +238,65 @@ export function deleteTask(taskId: string) {
   return apiFetch<void>(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
     method: "DELETE",
   });
+}
+
+export function skipTask(taskId: string) {
+  return apiFetch(
+    `/api/v1/tasks/${encodeURIComponent(taskId)}/skip`,
+    { method: "POST" },
+    taskSchema,
+  );
+}
+
+export function listTaskSeries(limit = 100) {
+  return apiFetch(
+    `/api/v1/task-series?limit=${limit}`,
+    {},
+    taskSeriesListResponseSchema,
+  );
+}
+
+export function getTaskSeries(seriesId: string) {
+  return apiFetch(
+    `/api/v1/task-series/${encodeURIComponent(seriesId)}`,
+    {},
+    taskSeriesSchema,
+  );
+}
+
+export type TaskSeriesUpdateInput = {
+  title?: string;
+  description?: string | null;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  tags?: string[];
+  recurrence?: TaskRecurrenceInput;
+};
+
+export function updateTaskSeries(seriesId: string, payload: TaskSeriesUpdateInput) {
+  return apiFetch(
+    `/api/v1/task-series/${encodeURIComponent(seriesId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    taskSeriesSchema,
+  );
+}
+
+function transitionTaskSeries(seriesId: string, action: "pause" | "resume" | "end") {
+  return apiFetch(
+    `/api/v1/task-series/${encodeURIComponent(seriesId)}/${action}`,
+    { method: "POST" },
+    taskSeriesSchema,
+  );
+}
+
+export function pauseTaskSeries(seriesId: string) {
+  return transitionTaskSeries(seriesId, "pause");
+}
+
+export function resumeTaskSeries(seriesId: string) {
+  return transitionTaskSeries(seriesId, "resume");
+}
+
+export function endTaskSeries(seriesId: string) {
+  return transitionTaskSeries(seriesId, "end");
 }

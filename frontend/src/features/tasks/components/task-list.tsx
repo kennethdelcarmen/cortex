@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, CalendarDays, Clock3, ListTodo, Pencil, Plus } from "lucide-react";
+import { ArrowRight, CalendarDays, Clock3, ListTodo, Pencil, Plus, Repeat2, SkipForward } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -225,6 +225,23 @@ function TaskRow({
               <span className="inline-flex items-center gap-1.5 font-mono">
                 <Clock3 aria-hidden="true" className="size-3.5" />
                 {urgencyLabel(urgency)}
+              </span>
+            ) : null}
+            {task.series_id ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-primary-strong" title="Recurring task">
+                <Repeat2 aria-hidden="true" className="size-3.5" />
+                <span>Recurring</span>
+              </span>
+            ) : null}
+            {task.series_exception ? (
+              <Badge variant="outline" className="h-auto rounded-full border-primary/35 bg-primary/10 px-1.5 py-0 text-[0.65rem] text-primary-strong">
+                Customized
+              </Badge>
+            ) : null}
+            {task.skipped_at ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-destructive">
+                <SkipForward aria-hidden="true" className="size-3.5" />
+                Skipped
               </span>
             ) : null}
             {task.tags.map((tag) => (

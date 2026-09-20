@@ -29,15 +29,23 @@ import { useActivityLogger } from "@/features/activity/hooks";
 import {
   createTask,
   deleteTask,
+  endTaskSeries,
+  getTaskSeries,
   getTaskSummary,
   listTasks,
+  pauseTaskSeries,
+  resumeTaskSeries,
+  skipTask,
   taskQueryKey,
+  taskSeriesQueryKey,
   taskSummaryQueryKey,
   updateTask,
+  updateTaskSeries,
   type Task,
   type TaskEditableField,
   type TaskListPage,
   type TaskPriority,
+  type TaskSeriesUpdateInput,
   type TaskStatus,
   type TaskUpdateInput,
 } from "../api";
@@ -58,6 +66,7 @@ import {
   type TaskFormValues,
 } from "./task-create-dialog";
 import { TaskDetailsDrawer } from "./task-details-drawer";
+import { TaskSeriesDialog } from "./task-series-dialog";
 import { TaskFilterToolbar } from "./task-filter-toolbar";
 import {
   initialTaskCalendarRange,
@@ -119,6 +128,18 @@ function describeTaskError(error: unknown) {
       return "Task dates need a timezone. Check the date and time fields and try again.";
     case "invalid_task_tag":
       return "Each tag must be non-empty and no longer than 64 characters.";
+    case "invalid_task_recurrence":
+      return "Choose a valid repeat pattern and end condition.";
+    case "invalid_task_recurrence_timezone":
+      return "That time zone is not available. Choose a valid IANA time zone, such as Asia/Manila.";
+    case "recurrence_anchor_required":
+      return "Set a start or due time to choose the first occurrence.";
+    case "invalid_task_series_state":
+      return "This recurring series changed before the action completed. Refresh and try again.";
+    case "task_occurrence_required":
+      return "Only a recurring task occurrence can be skipped.";
+    case "task_series_not_found":
+      return "That recurring series is no longer available. Refresh the task and try again.";
     case "invalid_task_cursor":
       return "This task page expired. Refresh the list and try again.";
     case "task_not_found":
@@ -248,6 +269,48 @@ function DeleteTaskDialog({
             disabled={isDeleting}
           >
             {isDeleting ? "Deleting…" : "Delete task"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SeriesActionDialog({
+  action,
+  open,
+  isPending,
+  onOpenChange,
+  onConfirm,
+}: {
+  action: "end" | "skip" | null;
+  open: boolean;
+  isPending: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  const isEnd = action === "end";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        className="w-[min(30rem,calc(100vw-2rem))] rounded-xl border-border bg-card p-6 text-card-foreground shadow-none sm:max-w-none sm:p-7"
+      >
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold tracking-[-0.025em]">
+            {isEnd ? "End this recurring series?" : "Skip this occurrence?"}
+          </DialogTitle>
+          <DialogDescription className="mt-3 text-sm leading-6 text-muted-foreground">
+            {isEnd
+              ? "Existing occurrences will stay in your task views. Cortex will stop generating future occurrences until you restart the series."
+              : "Only this occurrence will be canceled. The rest of the recurring series will continue as scheduled."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="mt-7 flex-row justify-end gap-2 border-0 bg-transparent p-0">
+          <DialogClose type="button" render={<Button variant="outline" size="lg" disabled={isPending} />}>Keep it</DialogClose>
+          <Button type="button" variant={isEnd ? "destructive" : "default"} size="lg" onClick={onConfirm} disabled={isPending}>
+            {isPending ? "Working…" : isEnd ? "End series" : "Skip occurrence"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -485,6 +548,18 @@ export function TasksPage({ email }: { email: string }) {
     return orderTasks(filtered, selectedTab === "all");
   }, [selectedTab, visibleTasks]);
 
+  const selectedTask = detailsTaskId
+    ? [...visibleTasks, ...tasks, ...calendarTasks].find((task) => task.id === detailsTaskId) ?? null
+    : null;
+  const [seriesEditOpen, setSeriesEditOpen] = useState(false);
+  const [seriesAction, setSeriesAction] = useState<"end" | "skip" | null>(null);
+
+  const seriesQuery = useQuery({
+    queryKey: [...taskSeriesQueryKey, selectedTask?.series_id ?? "none"],
+    queryFn: () => getTaskSeries(selectedTask?.series_id ?? ""),
+    enabled: Boolean(selectedTask?.series_id && detailsDrawerOpen),
+  });
+
   function getCachedTask(taskId: string) {
     for (const [, cachedData] of queryClient.getQueriesData<InfiniteData<TaskListPage>>({
       queryKey: taskQueryKey,
@@ -613,6 +688,81 @@ export function TasksPage({ email }: { email: string }) {
     },
   });
 
+  const seriesUpdateMutation = useMutation({
+    mutationFn: ({ seriesId, payload }: { seriesId: string; payload: TaskSeriesUpdateInput }) =>
+      updateTaskSeries(seriesId, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSeriesQueryKey });
+      setSeriesEditOpen(false);
+      feedback.success({ title: "Recurring task updated." });
+    },
+    onError: (error) => {
+      if (isSessionError(error)) {
+        setSessionError(describeTaskError(error));
+        return;
+      }
+
+      feedback.error({
+        title: "Recurring task could not be updated.",
+        description: describeTaskError(error),
+      });
+    },
+  });
+
+  const seriesTransitionMutation = useMutation({
+    mutationFn: ({ seriesId, action }: { seriesId: string; action: "pause" | "resume" | "end" }) => {
+      if (action === "pause") {
+        return pauseTaskSeries(seriesId);
+      }
+      if (action === "resume") {
+        return resumeTaskSeries(seriesId);
+      }
+      return endTaskSeries(seriesId);
+    },
+    onSuccess: (series) => {
+      void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSeriesQueryKey });
+      setSeriesAction(null);
+      feedback.success({ title: `Series ${series.state === "active" ? "resumed" : series.state === "paused" ? "paused" : "ended"}.` });
+    },
+    onError: (error) => {
+      if (isSessionError(error)) {
+        setSessionError(describeTaskError(error));
+        return;
+      }
+
+      feedback.error({
+        title: "Series action could not be completed.",
+        description: describeTaskError(error),
+      });
+    },
+  });
+
+  const skipMutation = useMutation({
+    mutationFn: (taskId: string) => skipTask(taskId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: taskSeriesQueryKey });
+      setSeriesAction(null);
+      feedback.success({ title: "Occurrence skipped." });
+    },
+    onError: (error) => {
+      if (isSessionError(error)) {
+        setSessionError(describeTaskError(error));
+        return;
+      }
+
+      feedback.error({
+        title: "Occurrence could not be skipped.",
+        description: describeTaskError(error),
+      });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: ({ taskId }: { taskId: string; title: string }) => deleteTask(taskId),
     onSuccess: (_response, variables) => {
@@ -674,6 +824,66 @@ export function TasksPage({ email }: { email: string }) {
     setDetailsDrawerOpen(open);
     if (!open) {
       setDetailsTaskId(null);
+    }
+  }
+
+  function openSeriesEdit() {
+    if (!seriesQuery.data || seriesQuery.data.state === "ended") {
+      return;
+    }
+
+    seriesUpdateMutation.reset();
+    setSeriesEditOpen(true);
+  }
+
+  function closeSeriesEdit(open: boolean) {
+    setSeriesEditOpen(open);
+    if (!open) {
+      seriesUpdateMutation.reset();
+    }
+  }
+
+  function handleSeriesUpdate(payload: TaskSeriesUpdateInput) {
+    if (!selectedTask?.series_id) {
+      return;
+    }
+
+    seriesUpdateMutation.mutate({ seriesId: selectedTask.series_id, payload });
+  }
+
+  function handleSeriesTransition(action: "pause" | "resume" | "end") {
+    if (!selectedTask?.series_id) {
+      return;
+    }
+
+    seriesTransitionMutation.mutate({ seriesId: selectedTask.series_id, action });
+  }
+
+  function requestEndSeries() {
+    setSeriesAction("end");
+  }
+
+  function requestSkipOccurrence() {
+    setSeriesAction("skip");
+  }
+
+  function closeSeriesAction(open: boolean) {
+    setSeriesAction(open ? seriesAction : null);
+    if (!open) {
+      seriesTransitionMutation.reset();
+      skipMutation.reset();
+    }
+  }
+
+  function confirmSeriesAction() {
+    if (!selectedTask) {
+      return;
+    }
+
+    if (seriesAction === "skip") {
+      skipMutation.mutate(selectedTask.id);
+    } else if (seriesAction === "end" && selectedTask.series_id) {
+      seriesTransitionMutation.mutate({ seriesId: selectedTask.series_id, action: "end" });
     }
   }
 
@@ -785,10 +995,6 @@ export function TasksPage({ email }: { email: string }) {
       urlState.to
     ),
   );
-  const selectedTask = detailsTaskId
-    ? [...visibleTasks, ...tasks, ...calendarTasks].find((task) => task.id === detailsTaskId) ?? null
-    : null;
-
   return (
     <WorkspaceShell
       email={email}
@@ -932,7 +1138,7 @@ export function TasksPage({ email }: { email: string }) {
       </section>
 
       <TaskCreateDialog
-        key={createDialogOpen ? "open" : "closed"}
+        key={`create-${createDialogOpen ? "open" : "closed"}`}
         open={createDialogOpen}
         isSaving={createMutation.isPending}
         initialStartAt={createDialogStartAt}
@@ -940,16 +1146,39 @@ export function TasksPage({ email }: { email: string }) {
         onSubmit={handleCreate}
       />
       <TaskDetailsDrawer
-        key={`${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
+        key={`details-${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
         open={detailsDrawerOpen && Boolean(selectedTask)}
         task={selectedTask}
+        series={seriesQuery.data ?? null}
+        isSeriesPending={Boolean(selectedTask?.series_id) && seriesQuery.isPending}
+        isSeriesActionPending={seriesTransitionMutation.isPending || skipMutation.isPending}
         onOpenChange={closeDetailsDrawer}
         onSaveField={saveTaskField}
+        onEditSeries={openSeriesEdit}
+        onPauseSeries={() => handleSeriesTransition("pause")}
+        onResumeSeries={() => handleSeriesTransition("resume")}
+        onEndSeries={requestEndSeries}
+        onSkipOccurrence={requestSkipOccurrence}
         onDeleteRequest={() => {
           if (selectedTask) {
             requestDelete(selectedTask);
           }
         }}
+      />
+      <TaskSeriesDialog
+        key={`series-${seriesEditOpen ? "open" : "closed"}-${seriesQuery.data?.id ?? "none"}`}
+        open={seriesEditOpen}
+        series={seriesQuery.data ?? null}
+        isSaving={seriesUpdateMutation.isPending}
+        onOpenChange={closeSeriesEdit}
+        onSubmit={handleSeriesUpdate}
+      />
+      <SeriesActionDialog
+        action={seriesAction}
+        open={Boolean(seriesAction)}
+        isPending={seriesTransitionMutation.isPending || skipMutation.isPending}
+        onOpenChange={closeSeriesAction}
+        onConfirm={confirmSeriesAction}
       />
       <DeleteTaskDialog
         task={pendingDelete}
