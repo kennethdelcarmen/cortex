@@ -16,6 +16,8 @@ from sqlalchemy import and_, delete, exists, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..storage import DatabaseStorage
+from ..tags.schemas import TagColor
+from ..tags.service import existing_tag_names, resolve_tag_names
 from ..tasks.models import Tag
 from .content import html_to_text
 from .errors import (
@@ -74,6 +76,8 @@ class NoteTagSummaryRecord:
 
     name: str
     count: int
+    color: TagColor
+    active: bool
 
 
 @dataclass(frozen=True)
@@ -205,13 +209,16 @@ async def _replace_tags(
     tag_names: list[str] | tuple[str, ...] | None,
 ) -> None:
     normalized_names = _normalize_tag_names(tag_names)
+    retained_names = await existing_tag_names(db, NoteTag, note_id)
+    resolved = await resolve_tag_names(
+        db,
+        user_id,
+        normalized_names,
+        retain_inactive=retained_names,
+    )
     await db.execute(delete(NoteTag).where(NoteTag.note_id == note_id))
     for name in normalized_names:
-        tag = await db.scalar(select(Tag).where(Tag.user_id == user_id, Tag.name == name).limit(1))
-        if tag is None:
-            tag = Tag(id=str(uuid4()), user_id=user_id, name=name, created_at=_utc_now())
-            db.add(tag)
-            await db.flush()
+        tag = resolved[name]
         db.add(NoteTag(note_id=note_id, tag_id=tag.id))
     await db.flush()
 
@@ -434,7 +441,7 @@ async def summarize_notes(storage: DatabaseStorage, user_id: str) -> NoteSummary
 
     async with storage.session() as db:
         result = await db.execute(
-            select(Tag.name, func.count(NoteTag.note_id))
+            select(Tag.name, Tag.color, Tag.archived_at, func.count(NoteTag.note_id))
             .join(NoteTag, NoteTag.tag_id == Tag.id)
             .join(
                 Note,
@@ -445,9 +452,17 @@ async def summarize_notes(storage: DatabaseStorage, user_id: str) -> NoteSummary
                 ),
             )
             .where(Tag.user_id == user_id)
-            .group_by(Tag.name)
+            .group_by(Tag.name, Tag.color, Tag.archived_at)
             .order_by(func.count(NoteTag.note_id).desc(), Tag.name.asc())
         )
         return NoteSummaryRecord(
-            tags=[NoteTagSummaryRecord(name=name, count=int(count)) for name, count in result.all()]
+            tags=[
+                NoteTagSummaryRecord(
+                    name=name,
+                    count=int(count),
+                    color=TagColor(color),
+                    active=archived_at is None,
+                )
+                for name, color, archived_at, count in result.all()
+            ]
         )

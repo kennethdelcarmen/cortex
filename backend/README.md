@@ -104,13 +104,18 @@ The initial service exposes:
 - `/api/v1/notes` for authenticated sanitized-HTML note and journal-entry CRUD,
   normalized tags, local full-text search, cursor pagination, soft deletion,
   and restoration.
+- `/api/v1/tags` for the authenticated shared tag catalog. Tags are normalized
+  and owner-scoped, use one of the named palette colors `rose`, `sea-glass`,
+  `amber`, `slate`, `plum`, `violet`, `sand`, or `destructive`, and can be
+  archived and restored without removing historical note or task memberships.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
   task, note, and activity-log operations to agents. MCP clients may send
   either an existing session token or the configured static MCP key as a
   bearer token in the `Authorization` header. Static keys are accepted only
   on `/mcp`; REST endpoints continue to require the browser session and CSRF
-  protections.
+  protections. The MCP catalog surface is read-only through `list_tags`; agents
+  may apply existing active tags but cannot mutate the catalog.
 - `/api/v1/auth/mcp-key` for authenticated owners to inspect non-secret key
   status, replace the key, or revoke it. The raw key is never returned. A
   replacement invalidates the previous key; revocation leaves session-token
@@ -138,17 +143,19 @@ with structured JSON metadata. Automatic task/auth event producers remain
 deferred.
 
 Notes store sanitized HTML bodies, optional titles, optional date-only journal
-dates, and owner-scoped normalized tags. REST and MCP accept legacy Markdown
-input and normalize it to HTML before storage; note responses always return
-sanitized HTML in `body`. Note search uses the local SQLite FTS5
+dates, and tags selected from the shared owner-scoped catalog. REST and MCP
+accept legacy Markdown input and normalize it to HTML before storage; note
+responses always return sanitized HTML in `body`. Note search uses the local SQLite FTS5
 extension and treats the `search` parameter as plain keywords with AND
 semantics; raw FTS operators are not part of the API contract. Normal note
 reads hide soft-deleted records, while `include_deleted=true` and the restore
 operation support recovery.
 
 Tasks use the statuses `backlog`, `todo`, `in_progress`, `done`, and `canceled`
-and the priorities `none`, `low`, `medium`, and `high`. Task tags are supplied
-inline, normalized per owner, and replaced atomically on update. `start_at` and
+and the priorities `none`, `low`, `medium`, and `high`. Task tags are selected
+from the shared catalog, normalized per owner, and replaced atomically on
+update. REST task and note writes reject unknown or newly archived tag names
+and include the allowed active catalog names in the error. `start_at` and
 `due_at` must be timezone-aware ISO datetimes. Deletes are soft deletes and
 excluded from normal task reads.
 

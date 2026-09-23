@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { SuggestedTags } from "@/components/suggested-tags";
+import { TagPicker } from "@/components/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,13 +18,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskSeries, TaskSeriesUpdateInput, TaskStatus } from "../api";
+import type { Tag, TagColor } from "@/features/tags/api";
 import {
   recurrenceFormError,
   recurrenceValuesFromPayload,
   recurrenceValuesToPayload,
   type RecurrenceFormValues,
 } from "../recurrence";
-import { appendTagInput, parseTagInput, priorityOption, statusOption, TASK_PRIORITIES, TASK_STATUSES } from "../utils";
+import { priorityOption, statusOption, TASK_PRIORITIES, TASK_STATUSES } from "../utils";
 import { TaskOptionValue } from "./task-option-value";
 import { TaskRecurrenceBuilder } from "./task-recurrence-builder";
 
@@ -32,8 +33,8 @@ type TaskSeriesDialogProps = {
   open: boolean;
   series: TaskSeries | null;
   isSaving: boolean;
-  suggestedTags: string[];
-  suggestionsPending: boolean;
+  availableTags: Tag[];
+  onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   onOpenChange: (open: boolean) => void;
   onSubmit: (payload: TaskSeriesUpdateInput) => void;
 };
@@ -43,7 +44,7 @@ type SeriesFormValues = {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
-  tags: string;
+  tags: string[];
   recurrence: RecurrenceFormValues;
 };
 
@@ -53,7 +54,7 @@ function formValuesFromSeries(series: TaskSeries | null): SeriesFormValues {
     description: series?.description ?? "",
     status: series?.status ?? "backlog",
     priority: series?.priority ?? "none",
-    tags: series?.tags.join(", ") ?? "",
+    tags: series?.tags ?? [],
     recurrence: series
       ? recurrenceValuesFromPayload(series.recurrence)
       : recurrenceValuesFromPayload({
@@ -74,8 +75,8 @@ export function TaskSeriesDialog({
   open,
   series,
   isSaving,
-  suggestedTags,
-  suggestionsPending,
+  availableTags,
+  onCreateTag,
   onOpenChange,
   onSubmit,
 }: TaskSeriesDialogProps) {
@@ -112,7 +113,7 @@ export function TaskSeriesDialog({
       description: values.description.trim() || null,
       status: values.status,
       priority: values.priority,
-      tags: parseTagInput(values.tags),
+      tags: values.tags,
       recurrence,
     });
   }
@@ -185,22 +186,16 @@ export function TaskSeriesDialog({
 
             <div>
               <Label htmlFor="task-series-tags" className="text-sm text-foreground">Tags</Label>
-              <Input
-                id="task-series-tags"
-                value={values.tags}
-                onChange={(event) => update("tags", event.target.value)}
-                disabled={isSaving}
-                className="mt-2 min-h-11 bg-background"
-                placeholder="work, home, focus"
-              />
-              <SuggestedTags
-                selectedTags={parseTagInput(values.tags)}
-                suggestions={suggestedTags}
-                pending={suggestionsPending}
-                disabled={isSaving}
-                onSelect={(tag) => update("tags", appendTagInput(values.tags, tag))}
-              />
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">Separate tags with commas.</p>
+              <div className="mt-2">
+                <TagPicker
+                  id="task-series-tags"
+                  tags={availableTags}
+                  value={values.tags}
+                  onChange={(tags) => update("tags", tags)}
+                  onCreateTag={onCreateTag}
+                  disabled={isSaving}
+                />
+              </div>
             </div>
 
             <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby="task-series-repeat-heading">

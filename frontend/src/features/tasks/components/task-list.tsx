@@ -2,6 +2,7 @@
 
 import { ArrowRight, CalendarDays, Clock3, ListTodo, Pencil, Plus, Repeat2, SkipForward } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
+import { TagBadge } from "@/components/tag-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { Task, TaskPriority, TaskStatus } from "../api";
+import type { Tag } from "@/features/tags/api";
 import {
   dueUrgency,
   formatDateTime,
@@ -38,6 +40,7 @@ type TaskListProps = {
   onPriorityChange: (task: Task, priority: TaskPriority) => void;
   onOpenDetails: (task: Task) => void;
   onAddTask: () => void;
+  tagCatalog: Tag[];
 };
 
 const ALL_TAB = {
@@ -149,6 +152,7 @@ function TaskRow({
   onStatusChange,
   onPriorityChange,
   onOpenDetails,
+  tagCatalog,
 }: {
   task: Task;
   now: Date;
@@ -156,6 +160,7 @@ function TaskRow({
   onStatusChange: (status: TaskStatus) => void;
   onPriorityChange: (priority: TaskPriority) => void;
   onOpenDetails: () => void;
+  tagCatalog: Tag[];
 }) {
   const status = statusOption(task.status);
   const priority = priorityOption(task.priority);
@@ -245,13 +250,13 @@ function TaskRow({
               </span>
             ) : null}
             {task.tags.map((tag) => (
-              <Badge
+              <TagBadge
                 key={tag}
-                variant="outline"
-                className="h-auto rounded-full bg-background px-1.5 py-0 text-[0.65rem]"
-              >
-                #{tag}
-              </Badge>
+                name={tag}
+                color={tagCatalog.find((item) => item.name === tag)?.color}
+                active={tagCatalog.find((item) => item.name === tag)?.active ?? false}
+                className="h-auto rounded-full px-1.5 py-0 text-[0.65rem]"
+              />
             ))}
           </div>
         </div>
@@ -329,6 +334,7 @@ export function TaskList({
   onPriorityChange,
   onOpenDetails,
   onAddTask,
+  tagCatalog,
 }: TaskListProps) {
   return (
     <div>
@@ -377,6 +383,7 @@ export function TaskList({
                 onStatusChange={(status) => onStatusChange(task, status)}
                 onPriorityChange={(priority) => onPriorityChange(task, priority)}
                 onOpenDetails={() => onOpenDetails(task)}
+                tagCatalog={tagCatalog}
               />
             ))}
           </ul>

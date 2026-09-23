@@ -26,6 +26,9 @@ from .memory.service import (
     update_note,
 )
 from .storage import Storage
+from .tags.errors import TagError
+from .tags.schemas import TagListResponse, TagResponse
+from .tags.service import list_tags
 from .tasks.errors import TaskError
 from .tasks.schemas import (
     RecurrenceState,
@@ -113,8 +116,11 @@ def _series_response(record: TaskSeriesRecord) -> TaskSeriesResponse:
     )
 
 
-def _raise_tool(error: TaskError) -> None:
-    raise ToolError(f"{error.code}: {error.message}") from error
+def _raise_tool(error: TaskError | NoteError | TagError) -> None:
+    details = ""
+    if hasattr(error, "unknown_tags") and hasattr(error, "allowed_tags"):
+        details = f" Unknown tags: {error.unknown_tags}. Allowed tags: {error.allowed_tags}."
+    raise ToolError(f"{error.code}: {error.message}{details}") from error
 
 
 def _activity_log_response(record: ActivityLogRecord) -> ActivityLogResponse:
@@ -146,14 +152,37 @@ def _note_response(record: NoteRecord) -> NoteResponse:
     )
 
 
-def _raise_note_tool(error: NoteError) -> None:
-    raise ToolError(f"{error.code}: {error.message}") from error
+def _raise_note_tool(error: NoteError | TagError) -> None:
+    _raise_tool(error)
 
 
 def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> FastMCP:
     """Create the MCP registry backed by shared task service functions."""
 
     server = FastMCP(name)
+
+    @server.tool(name="list_tags")
+    async def list_tags_tool(ctx: Context | None = None) -> TagListResponse:
+        """List active shared tags for note and task creation or updates."""
+
+        del ctx
+        records = await list_tags(
+            database_storage(storage),
+            get_mcp_auth().user.id,
+        )
+        return TagListResponse(
+            items=[
+                TagResponse(
+                    id=record.id,
+                    name=record.name,
+                    color=record.color,
+                    active=record.active,
+                    created_at=record.created_at,
+                    archived_at=record.archived_at,
+                )
+                for record in records
+            ]
+        )
 
     @server.tool(name="create_task")
     async def create_task_tool(payload: TaskCreateRequest, ctx: Context) -> TaskResponse:
@@ -166,7 +195,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 get_mcp_auth().user.id,
                 payload,
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _response(record)
 
@@ -206,7 +235,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                     order=order,
                 ),
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return TaskListResponse(
             items=[_response(record) for record in page.items],
@@ -227,7 +256,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 get_mcp_auth().user.id,
                 timezone,
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return TaskSummaryResponse(
             all=summary.all,
@@ -235,7 +264,15 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             upcoming=summary.upcoming,
             overdue=summary.overdue,
             high_priority=summary.high_priority,
-            tags=[TaskTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags],
+            tags=[
+                TaskTagSummaryResponse(
+                    name=tag.name,
+                    count=tag.count,
+                    color=tag.color,
+                    active=tag.active,
+                )
+                for tag in summary.tags
+            ],
         )
 
     @server.tool(name="get_task")
@@ -245,7 +282,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             record = await get_task(database_storage(storage), get_mcp_auth().user.id, task_id)
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _response(record)
 
@@ -265,7 +302,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 task_id,
                 payload,
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _response(record)
 
@@ -285,7 +322,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 task_id,
                 payload,
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _response(record)
 
@@ -296,7 +333,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             await delete_task(database_storage(storage), get_mcp_auth().user.id, task_id)
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return "Task deleted."
 
@@ -309,7 +346,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await skip_task_occurrence(
                 database_storage(storage), get_mcp_auth().user.id, task_id
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _response(record)
 
@@ -323,7 +360,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             page = await list_task_series(database_storage(storage), get_mcp_auth().user.id, limit)
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return TaskSeriesListResponse(items=[_series_response(item) for item in page.items])
 
@@ -336,7 +373,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await get_task_series(
                 database_storage(storage), get_mcp_auth().user.id, series_id
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _series_response(record)
 
@@ -353,7 +390,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await update_task_series(
                 database_storage(storage), get_mcp_auth().user.id, series_id, payload
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _series_response(record)
 
@@ -366,7 +403,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await pause_task_series(
                 database_storage(storage), get_mcp_auth().user.id, series_id
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _series_response(record)
 
@@ -379,7 +416,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await resume_task_series(
                 database_storage(storage), get_mcp_auth().user.id, series_id
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _series_response(record)
 
@@ -392,7 +429,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await end_task_series(
                 database_storage(storage), get_mcp_auth().user.id, series_id
             )
-        except TaskError as exc:
+        except (TaskError, TagError) as exc:
             _raise_tool(exc)
         return _series_response(record)
 
@@ -407,7 +444,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 get_mcp_auth().user.id,
                 payload,
             )
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return _note_response(record)
 
@@ -439,7 +476,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                     cursor=cursor,
                 ),
             )
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return NoteListResponse(
             items=[_note_response(record) for record in page.items],
@@ -453,7 +490,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             record = await get_note(database_storage(storage), get_mcp_auth().user.id, note_id)
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return _note_response(record)
 
@@ -470,7 +507,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
             record = await update_note(
                 database_storage(storage), get_mcp_auth().user.id, note_id, payload
             )
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return _note_response(record)
 
@@ -481,7 +518,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             await delete_note(database_storage(storage), get_mcp_auth().user.id, note_id)
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return "Note deleted."
 
@@ -492,7 +529,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         del ctx
         try:
             record = await restore_note(database_storage(storage), get_mcp_auth().user.id, note_id)
-        except NoteError as exc:
+        except (NoteError, TagError) as exc:
             _raise_note_tool(exc)
         return _note_response(record)
 

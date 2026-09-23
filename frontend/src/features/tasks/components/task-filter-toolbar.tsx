@@ -29,6 +29,7 @@ import {
   type TaskView,
 } from "../task-filters";
 import { cn } from "@/lib/utils";
+import { TagBadge } from "@/components/tag-badge";
 
 type TaskFilterToolbarProps = {
   state: TaskUrlState;
@@ -40,6 +41,7 @@ type TaskFilterToolbarProps = {
   onTagsClear: () => void;
   onCustomRangeApply: (from: string, to: string) => void;
   onCustomRangeClear: () => void;
+  tagCatalog: Array<{ name: string; color: import("@/features/tags/api").TagColor; active: boolean }>;
 };
 
 function valueToDate(value?: string) {
@@ -62,7 +64,8 @@ function TagFilter({
   isSummaryPending,
   onTagToggle,
   onTagsClear,
-}: Pick<TaskFilterToolbarProps, "state" | "summary" | "isSummaryPending" | "onTagToggle" | "onTagsClear">) {
+  tagCatalog,
+}: Pick<TaskFilterToolbarProps, "state" | "summary" | "isSummaryPending" | "onTagToggle" | "onTagsClear" | "tagCatalog">) {
   const [open, setOpen] = useState(false);
   const selectedLabel = state.tags.length
     ? state.tags.map((tag) => `#${tag}`).join(", ")
@@ -111,7 +114,12 @@ function TagFilter({
                     aria-label={`Filter by ${tag.name}`}
                     className="size-4 accent-primary"
                   />
-                  <span className="min-w-0 flex-1 truncate text-sm">#{tag.name}</span>
+                  <TagBadge
+                    name={tag.name}
+                    color={tagCatalog.find((item) => item.name === tag.name)?.color ?? tag.color}
+                    active={tagCatalog.find((item) => item.name === tag.name)?.active ?? tag.active}
+                    className="min-w-0 flex-1 justify-start truncate border-0 bg-transparent px-0 text-sm"
+                  />
                   <span className="font-mono text-xs text-muted-foreground">{tag.count}</span>
                 </label>
               );
@@ -230,6 +238,7 @@ export function TaskFilterToolbar({
   onTagsClear,
   onCustomRangeApply,
   onCustomRangeClear,
+  tagCatalog,
 }: TaskFilterToolbarProps) {
   const [searchDraft, setSearchDraft] = useState(state.search);
 
@@ -311,6 +320,7 @@ export function TaskFilterToolbar({
             isSummaryPending={isSummaryPending}
             onTagToggle={onTagToggle}
             onTagsClear={onTagsClear}
+            tagCatalog={tagCatalog}
           />
           <DateRangeFilter
             state={state}

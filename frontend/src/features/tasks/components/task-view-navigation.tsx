@@ -2,6 +2,7 @@
 
 import { ArrowDown, ArrowUp, CalendarDays, ListTodo, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TagBadge } from "@/components/tag-badge";
 import type { TaskSummary } from "../api";
 import {
   formatTaskDateRange,
@@ -18,6 +19,7 @@ type TaskViewNavigationProps = {
   onViewChange: (view: TaskView) => void;
   onCalendarChange: () => void;
   onTagToggle: (tag: string) => void;
+  tagCatalog: Array<{ name: string; color: import("@/features/tags/api").TagColor; active: boolean }>;
 };
 
 const viewOptions: Array<{ value: Exclude<TaskView, "custom">; icon: typeof ListTodo }> = [
@@ -79,6 +81,7 @@ export function TaskViewNavigation({
   onViewChange,
   onCalendarChange,
   onTagToggle,
+  tagCatalog,
 }: TaskViewNavigationProps) {
   return (
     <div className="mt-4 border-l border-border/70 pl-2">
@@ -143,7 +146,12 @@ export function TaskViewNavigation({
                       : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                   )}
                 >
-                  <span className="min-w-0 flex-1 truncate text-left">#{tag.name}</span>
+                    <TagBadge
+                      name={tag.name}
+                      color={tagCatalog.find((item) => item.name === tag.name)?.color ?? tag.color}
+                      active={tagCatalog.find((item) => item.name === tag.name)?.active ?? tag.active}
+                      className="min-w-0 flex-1 justify-start truncate border-0 bg-transparent px-0 text-left"
+                    />
                   <span className="font-mono text-[0.62rem] text-muted-foreground">{tag.count}</span>
                 </Button>
               );

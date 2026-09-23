@@ -25,8 +25,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
-import { mostUsedTagNames } from "@/lib/tags";
 import { useActivityLogger } from "@/features/activity/hooks";
+import {
+  createTag,
+  getTags,
+  tagsQueryKey,
+  type Tag,
+} from "@/features/tags/api";
 import {
   createTask,
   deleteTask,
@@ -378,10 +383,11 @@ export function TasksPage({ email }: { email: string }) {
     queryFn: () => getTaskSummary(timezone),
     enabled: Boolean(timezone),
   });
-  const suggestedTags = useMemo(
-    () => mostUsedTagNames(summaryQuery.data?.tags ?? []),
-    [summaryQuery.data?.tags],
-  );
+  const tagCatalogQuery = useQuery({
+    queryKey: tagsQueryKey,
+    queryFn: () => getTags(true),
+  });
+  const tagCatalog: Tag[] = tagCatalogQuery.data?.items ?? [];
 
   const query = useInfiniteQuery({
     queryKey: taskListQueryKey,
@@ -618,6 +624,16 @@ export function TasksPage({ email }: { email: string }) {
         title: "Task could not be added.",
         description: describeTaskError(error),
       });
+    },
+  });
+
+  const createTagMutation = useMutation({
+    mutationFn: createTag,
+    onSuccess: (tag) => {
+      queryClient.setQueryData<{ items: Tag[] }>(tagsQueryKey, (current) => ({
+        items: [...(current?.items ?? []).filter((item) => item.id !== tag.id), tag],
+      }));
+      feedback.success({ title: `Tag #${tag.name} added.` });
     },
   });
 
@@ -1011,6 +1027,7 @@ export function TasksPage({ email }: { email: string }) {
           onViewChange={handleViewChange}
           onCalendarChange={() => handleLayoutChange("calendar")}
           onTagToggle={handleTagToggle}
+          tagCatalog={tagCatalog}
         />
       }
     >
@@ -1044,6 +1061,7 @@ export function TasksPage({ email }: { email: string }) {
             onTagsClear={handleTagsClear}
             onCustomRangeApply={handleCustomRangeApply}
             onCustomRangeClear={handleCustomRangeClear}
+            tagCatalog={tagCatalog}
           />
         ) : null}
 
@@ -1124,6 +1142,7 @@ export function TasksPage({ email }: { email: string }) {
               onPriorityChange={handlePriorityChange}
               onOpenDetails={openDetails}
               onAddTask={() => openCreate()}
+              tagCatalog={tagCatalog}
             />
             {query.hasNextPage ? (
               <div className="flex justify-center">
@@ -1146,8 +1165,8 @@ export function TasksPage({ email }: { email: string }) {
         key={`create-${createDialogOpen ? "open" : "closed"}`}
         open={createDialogOpen}
         isSaving={createMutation.isPending}
-        suggestedTags={suggestedTags}
-        suggestionsPending={summaryQuery.isPending}
+        availableTags={tagCatalog}
+        onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
         initialStartAt={createDialogStartAt}
         onOpenChange={closeCreateDialog}
         onSubmit={handleCreate}
@@ -1156,8 +1175,8 @@ export function TasksPage({ email }: { email: string }) {
         key={`details-${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
         open={detailsDrawerOpen && Boolean(selectedTask)}
         task={selectedTask}
-        suggestedTags={suggestedTags}
-        suggestionsPending={summaryQuery.isPending}
+        availableTags={tagCatalog}
+        onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
         series={seriesQuery.data ?? null}
         isSeriesPending={Boolean(selectedTask?.series_id) && seriesQuery.isPending}
         isSeriesActionPending={seriesTransitionMutation.isPending || skipMutation.isPending}
@@ -1179,8 +1198,8 @@ export function TasksPage({ email }: { email: string }) {
         open={seriesEditOpen}
         series={seriesQuery.data ?? null}
         isSaving={seriesUpdateMutation.isPending}
-        suggestedTags={suggestedTags}
-        suggestionsPending={summaryQuery.isPending}
+        availableTags={tagCatalog}
+        onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
         onOpenChange={closeSeriesEdit}
         onSubmit={handleSeriesUpdate}
       />

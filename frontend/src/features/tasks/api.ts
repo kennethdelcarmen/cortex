@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "@/lib/api/client";
+import { tagColorSchema } from "@/features/tags/api";
 
 export const taskStatusSchema = z.enum([
   "backlog",
@@ -68,6 +69,8 @@ const taskSummaryResponseSchema = z.object({
     z.object({
       name: z.string().min(1),
       count: z.number().int().nonnegative(),
+      color: tagColorSchema,
+      active: z.boolean(),
     }),
   ),
 });

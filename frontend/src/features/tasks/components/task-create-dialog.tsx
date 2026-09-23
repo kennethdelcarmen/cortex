@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { SuggestedTags } from "@/components/suggested-tags";
+import { TagPicker } from "@/components/tag-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskStatus } from "../api";
+import type { Tag, TagColor } from "@/features/tags/api";
 import {
   defaultRecurrenceValues,
   recurrenceFormError,
@@ -18,11 +19,9 @@ import {
 } from "../recurrence";
 import {
   adjustDueDateForStart,
-  appendTagInput,
   localDateTimePartsToIso,
   currentLocalDateInput,
   dueDateTimeAfterStart,
-  parseTagInput,
   priorityOption,
   statusOption,
   TASK_PRIORITIES,
@@ -41,15 +40,15 @@ export type TaskFormValues = {
   priority: TaskPriority;
   startAt: TaskDateTimeValue;
   dueAt: TaskDateTimeValue;
-  tags: string;
+  tags: string[];
   recurrence: RecurrenceFormValues;
 };
 
 type TaskCreateDialogProps = {
   open: boolean;
   isSaving: boolean;
-  suggestedTags: string[];
-  suggestionsPending: boolean;
+  availableTags: Tag[];
+  onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   initialStartAt?: TaskDateTimeValue;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: TaskFormValues) => void;
@@ -69,7 +68,7 @@ function defaultFormValues(initialStartAt?: TaskDateTimeValue): TaskFormValues {
     priority: "none",
     startAt,
     dueAt,
-    tags: "",
+    tags: [],
     recurrence: defaultRecurrenceValues(startAt),
   };
 }
@@ -104,8 +103,8 @@ function recurrenceDefaultsForStartChange(
 export function TaskCreateDialog({
   open,
   isSaving,
-  suggestedTags,
-  suggestionsPending,
+  availableTags,
+  onCreateTag,
   initialStartAt,
   onOpenChange,
   onSubmit,
@@ -327,26 +326,16 @@ export function TaskCreateDialog({
               <Label htmlFor="task-create-tags" className="text-sm text-foreground">
                 Tags
               </Label>
-              <Input
-                id="task-create-tags"
-                name="tags"
-                type="text"
-                value={values.tags}
-                onChange={(event) => updateValue("tags", event.target.value)}
-                placeholder="work, home, focus"
-                className="mt-2 min-h-11 bg-background text-foreground"
-                disabled={isSaving}
-              />
-              <SuggestedTags
-                selectedTags={parseTagInput(values.tags)}
-                suggestions={suggestedTags}
-                pending={suggestionsPending}
-                disabled={isSaving}
-                onSelect={(tag) => updateValue("tags", appendTagInput(values.tags, tag))}
-              />
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                Separate tags with commas. They will be normalized when saved.
-              </p>
+              <div className="mt-2">
+                <TagPicker
+                  id="task-create-tags"
+                  tags={availableTags}
+                  value={values.tags}
+                  onChange={(tags) => updateValue("tags", tags)}
+                  onCreateTag={onCreateTag}
+                  disabled={isSaving}
+                />
+              </div>
             </div>
           </div>
 
@@ -377,7 +366,7 @@ export function formValuesToPayload(values: TaskFormValues) {
     priority: values.priority,
     start_at: localDateTimePartsToIso(values.startAt),
     due_at: localDateTimePartsToIso(values.dueAt),
-    tags: parseTagInput(values.tags),
+    tags: values.tags,
     ...(recurrence ? { recurrence } : {}),
   };
 }

@@ -134,12 +134,19 @@ class TaskSeries(Base):
 
 
 class Tag(Base):
-    """An owner-scoped normalized task tag."""
+    """An owner-scoped normalized tag shared by notes and tasks."""
 
     __tablename__ = "tags"
     __table_args__ = (
+        CheckConstraint(
+            "color IN ("
+            "'rose', 'sea-glass', 'amber', 'slate', 'plum', 'violet', 'sand', 'destructive'"
+            ")",
+            name="ck_tags_color",
+        ),
         UniqueConstraint("user_id", "name", name="uq_tags_user_name"),
         Index("ix_tags_user_id", "user_id"),
+        Index("ix_tags_user_archived_name", "user_id", "archived_at", "name"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -149,7 +156,9 @@ class Tag(Base):
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(64), nullable=False)
+    color: Mapped[str] = mapped_column(String(16), nullable=False, default="slate")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TaskTag(Base):

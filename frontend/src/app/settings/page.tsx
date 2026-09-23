@@ -2,6 +2,7 @@
 
 import { Settings2 } from "lucide-react";
 import { McpAccessSettings } from "@/features/settings/components/mcp-access-settings";
+import { TagCatalogSettings } from "@/features/settings/components/tag-catalog-settings";
 import {
   WorkspaceRouteGuard,
   WorkspaceShell,
@@ -33,7 +34,10 @@ export default function SettingsPage() {
               </p>
             </header>
             <div className="mt-7">
-              <McpAccessSettings />
+              <div className="space-y-6">
+                <TagCatalogSettings />
+                <McpAccessSettings />
+              </div>
             </div>
           </div>
         </WorkspaceShell>

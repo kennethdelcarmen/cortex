@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from ..auth.service import CurrentAuth
 from ..storage import DatabaseStorage
+from ..tags.errors import TagError
 from ..tasks.errors import TaskError
 from ..tasks.schemas import (
     RecurrenceState,
@@ -54,11 +55,12 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 series_router = APIRouter(prefix="/api/v1/task-series", tags=["task-series"])
 
 
-def _raise_http(error: TaskError) -> None:
-    raise HTTPException(
-        status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
-    ) from error
+def _raise_http(error: TaskError | TagError) -> None:
+    detail: dict[str, object] = {"code": error.code, "message": error.message}
+    for attribute in ("unknown_tags", "allowed_tags"):
+        if hasattr(error, attribute):
+            detail[attribute] = getattr(error, attribute)
+    raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
 def _response(record: TaskRecord) -> TaskResponse:
@@ -119,7 +121,7 @@ async def create_task_route(
 
     try:
         record = await create_task(storage, auth.user.id, payload)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -134,7 +136,7 @@ async def task_summary_route(
 
     try:
         summary = await summarize_tasks(storage, auth.user.id, timezone)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return TaskSummaryResponse(
         all=summary.all,
@@ -142,7 +144,15 @@ async def task_summary_route(
         upcoming=summary.upcoming,
         overdue=summary.overdue,
         high_priority=summary.high_priority,
-        tags=[TaskTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags],
+        tags=[
+            TaskTagSummaryResponse(
+                name=tag.name,
+                count=tag.count,
+                color=tag.color,
+                active=tag.active,
+            )
+            for tag in summary.tags
+        ],
     )
 
 
@@ -182,7 +192,7 @@ async def list_tasks_route(
                 order=order,
             ),
         )
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return TaskListResponse(
         items=[_response(record) for record in page.items],
@@ -200,7 +210,7 @@ async def get_task_route(
 
     try:
         record = await get_task(storage, auth.user.id, task_id)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -216,7 +226,7 @@ async def reorder_task_route(
 
     try:
         record = await reorder_task(storage, auth.user.id, task_id, payload)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -232,7 +242,7 @@ async def update_task_route(
 
     try:
         record = await update_task(storage, auth.user.id, task_id, payload)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -247,7 +257,7 @@ async def delete_task_route(
 
     try:
         await delete_task(storage, auth.user.id, task_id)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -262,7 +272,7 @@ async def skip_task_route(
 
     try:
         record = await skip_task_occurrence(storage, auth.user.id, task_id)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -275,7 +285,7 @@ async def list_task_series_route(
 ) -> TaskSeriesListResponse:
     try:
         page = await list_task_series(storage, auth.user.id, limit)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return TaskSeriesListResponse(items=[_series_response(item) for item in page.items])
 
@@ -288,7 +298,7 @@ async def get_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await get_task_series(storage, auth.user.id, series_id)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -302,7 +312,7 @@ async def update_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await update_task_series(storage, auth.user.id, series_id, payload)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -315,7 +325,7 @@ async def pause_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await pause_task_series(storage, auth.user.id, series_id)
-    except TaskError as exc:
+    except (TaskError, TagError) as exc:
         _raise_http(exc)
     return _series_response(record)
 

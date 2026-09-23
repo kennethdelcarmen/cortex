@@ -122,7 +122,14 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             row[1] for row in connection.execute("PRAGMA table_info(task_series_tags)")
         }
         assert task_series_tag_columns == {"series_id", "tag_id"}
-        assert tag_columns == {"id", "user_id", "name", "created_at"}
+        assert tag_columns == {
+            "id",
+            "user_id",
+            "name",
+            "color",
+            "created_at",
+            "archived_at",
+        }
         assert task_tag_columns == {"task_id", "tag_id"}
         note_columns = {row[1] for row in connection.execute("PRAGMA table_info(notes)")}
         assert note_columns == {
@@ -172,6 +179,7 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_tasks_owner_deleted_priority",
             "ix_tasks_owner_deleted_due_created",
             "ix_tags_user_id",
+            "ix_tags_user_archived_name",
             "ix_task_tags_tag_id",
             "ix_activity_logs_user_created",
             "ix_activity_logs_user_event_created",
@@ -192,7 +200,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0008_mcp_api_keys",
+            "0009_fixed_tags",
         )
 
 
@@ -223,6 +231,90 @@ def test_mcp_key_migration_upgrades_existing_database(tmp_path, monkeypatch) -> 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM mcp_api_keys").fetchone() == (0,)
+
+
+def test_fixed_tags_migration_defaults_existing_tags_and_preserves_memberships(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0008_mcp_api_keys")
+
+    with sqlite3.connect(database_path) as connection:
+        user_id = "00000000-0000-0000-0000-000000000001"
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                "owner@example.com",
+                "not-used",
+                1,
+                1,
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO tags (id, user_id, name, created_at) VALUES (?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000010",
+                user_id,
+                "work",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO tasks "
+            "(id, user_id, title, status, priority, position, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000020",
+                user_id,
+                "Existing task",
+                "backlog",
+                "none",
+                0,
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO notes (id, user_id, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000030",
+                user_id,
+                "Existing note",
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000020",
+                "00000000-0000-0000-0000-000000000010",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000030",
+                "00000000-0000-0000-0000-000000000010",
+            ),
+        )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT color, archived_at FROM tags WHERE name = 'work'"
+        ).fetchone() == ("slate", None)
+        assert connection.execute("SELECT COUNT(*) FROM task_tags").fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM note_tags").fetchone() == (1,)
 
 
 def test_notes_migration_converts_bodies_and_rebuilds_search_index(tmp_path, monkeypatch) -> None:

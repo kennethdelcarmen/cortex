@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..tags.schemas import TagColor
 from .content import normalize_note_body
 
 
@@ -79,6 +80,8 @@ class NoteTagSummaryResponse(BaseModel):
 
     name: str
     count: int = Field(ge=0)
+    color: TagColor
+    active: bool
 
 
 class NoteSummaryResponse(BaseModel):

@@ -65,6 +65,13 @@ async def setup_owner(client: AsyncClient) -> None:
         },
     )
     assert response.status_code == 201
+    for name in ("work", "focus", "home", "personal", "admin", "routine"):
+        tag = await client.post(
+            "/api/v1/tags",
+            headers=await csrf_headers(client),
+            json={"name": name},
+        )
+        assert tag.status_code == 201
 
 
 async def csrf_headers(client: AsyncClient) -> dict[str, str]:
@@ -364,9 +371,9 @@ async def test_task_summary_counts_views_and_tags(client: AsyncClient, monkeypat
         "overdue": 1,
         "high_priority": 2,
         "tags": [
-            {"name": "admin", "count": 3},
-            {"name": "personal", "count": 1},
-            {"name": "work", "count": 2},
+            {"name": "admin", "count": 3, "color": "slate", "active": True},
+            {"name": "personal", "count": 1, "color": "slate", "active": True},
+            {"name": "work", "count": 2, "color": "slate", "active": True},
         ],
     }
 

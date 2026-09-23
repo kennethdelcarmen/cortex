@@ -13,6 +13,8 @@ const apiErrorResponseSchema = z.object({
       z.object({
         code: z.string(),
         message: z.string(),
+        unknown_tags: z.array(z.string()).optional(),
+        allowed_tags: z.array(z.string()).optional(),
       }),
       z.string(),
     ])
@@ -24,12 +26,21 @@ const apiErrorResponseSchema = z.object({
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly unknownTags?: string[];
+  readonly allowedTags?: string[];
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    details?: { unknownTags?: string[]; allowedTags?: string[] },
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.unknownTags = details?.unknownTags;
+    this.allowedTags = details?.allowedTags;
   }
 }
 
@@ -64,7 +75,10 @@ function parseApiError(status: number, body: unknown): ApiError {
   const detail = parsed.data.detail;
 
   if (detail && typeof detail === "object") {
-    return new ApiError(status, detail.code, detail.message);
+    return new ApiError(status, detail.code, detail.message, {
+      unknownTags: detail.unknown_tags,
+      allowedTags: detail.allowed_tags,
+    });
   }
 
   if (typeof detail === "string") {

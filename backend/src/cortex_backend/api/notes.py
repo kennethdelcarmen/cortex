@@ -27,16 +27,18 @@ from ..memory.service import (
     update_note,
 )
 from ..storage import DatabaseStorage
+from ..tags.errors import TagError
 from .dependencies import get_current_auth, get_database_storage, require_csrf_auth
 
 router = APIRouter(prefix="/api/v1/notes", tags=["notes"])
 
 
-def _raise_http(error: NoteError) -> None:
-    raise HTTPException(
-        status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
-    ) from error
+def _raise_http(error: NoteError | TagError) -> None:
+    detail: dict[str, object] = {"code": error.code, "message": error.message}
+    for attribute in ("unknown_tags", "allowed_tags"):
+        if hasattr(error, attribute):
+            detail[attribute] = getattr(error, attribute)
+    raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
 def _response(record: NoteRecord) -> NoteResponse:
@@ -62,7 +64,7 @@ async def create_note_route(
 
     try:
         record = await create_note(storage, auth.user.id, payload)
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -76,7 +78,15 @@ async def note_summary_route(
 
     summary = await summarize_notes(storage, auth.user.id)
     return NoteSummaryResponse(
-        tags=[NoteTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags]
+        tags=[
+            NoteTagSummaryResponse(
+                name=tag.name,
+                count=tag.count,
+                color=tag.color,
+                active=tag.active,
+            )
+            for tag in summary.tags
+        ]
     )
 
 
@@ -108,7 +118,7 @@ async def list_notes_route(
                 cursor=cursor,
             ),
         )
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return NoteListResponse(
         items=[_response(record) for record in page.items],
@@ -126,7 +136,7 @@ async def get_note_route(
 
     try:
         record = await get_note(storage, auth.user.id, note_id)
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -142,7 +152,7 @@ async def update_note_route(
 
     try:
         record = await update_note(storage, auth.user.id, note_id, payload)
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -157,7 +167,7 @@ async def delete_note_route(
 
     try:
         await delete_note(storage, auth.user.id, note_id)
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -172,6 +182,6 @@ async def restore_note_route(
 
     try:
         record = await restore_note(storage, auth.user.id, note_id)
-    except NoteError as exc:
+    except (NoteError, TagError) as exc:
         _raise_http(exc)
     return _response(record)

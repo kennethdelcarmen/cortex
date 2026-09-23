@@ -11,6 +11,7 @@ from .api.health import router as health_router
 from .api.logs import router as activity_logs_router
 from .api.mcp import MCPAuthMiddleware
 from .api.notes import router as notes_router
+from .api.tags import router as tags_router
 from .api.tasks import router as tasks_router
 from .api.tasks import series_router as task_series_router
 from .api.v1 import router as v1_router
@@ -75,6 +76,7 @@ def create_app(
     application.include_router(auth_router)
     application.include_router(activity_logs_router)
     application.include_router(notes_router)
+    application.include_router(tags_router)
     application.include_router(tasks_router)
     application.include_router(task_series_router)
     application.mount(

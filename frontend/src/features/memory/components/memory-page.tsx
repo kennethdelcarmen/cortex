@@ -15,14 +15,13 @@ import {
   Pencil,
   Plus,
   Search,
-  Tag,
   Trash2,
-  X,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
-import { SuggestedTags } from "@/components/suggested-tags";
+import { TagBadge } from "@/components/tag-badge";
+import { TagPicker } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,7 +37,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { mostUsedTagNames } from "@/lib/tags";
 import { cn } from "@/lib/utils";
 import {
   createNote,
@@ -62,6 +60,8 @@ import {
   WorkspaceShell,
 } from "@/features/workspace/components/workspace-shell";
 import { useCurrentUser } from "@/features/auth/hooks";
+import type { Tag, TagColor } from "@/features/tags/api";
+import { createTag, getTags, tagsQueryKey } from "@/features/tags/api";
 
 type NoteDraft = {
   title: string;
@@ -161,10 +161,6 @@ function draftPayload(draft: NoteDraft): NoteWriteInput {
   };
 }
 
-function normalizeTag(value: string) {
-  return value.trim().replace(/^#/, "").toLowerCase();
-}
-
 function isSessionError(error: unknown) {
   return error instanceof ApiError && error.code === "unauthenticated";
 }
@@ -241,98 +237,28 @@ function ConfirmDialog({
 
 function TagEditor({
   tags,
-  suggestedTags,
-  suggestionsPending,
+  availableTags,
+  onCreateTag,
   disabled,
   onChange,
 }: {
   tags: string[];
-  suggestedTags: string[];
-  suggestionsPending: boolean;
+  availableTags: Tag[];
+  onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   disabled: boolean;
   onChange: (tags: string[]) => void;
 }) {
-  const [value, setValue] = useState("");
-
-  function commitTag() {
-    const tag = normalizeTag(value);
-    if (!tag || tags.includes(tag) || tags.length >= 20) {
-      setValue("");
-      return;
-    }
-
-    onChange([...tags, tag]);
-    setValue("");
-  }
-
-  function addSuggestedTag(suggestedTag: string) {
-    const pendingTag = normalizeTag(value);
-    const nextTags = [...tags];
-
-    if (pendingTag && !nextTags.includes(pendingTag) && nextTags.length < 20) {
-      nextTags.push(pendingTag);
-    }
-
-    const tag = normalizeTag(suggestedTag);
-    if (tag && !nextTags.includes(tag) && nextTags.length < 20) {
-      nextTags.push(tag);
-    }
-
-    onChange(nextTags);
-    setValue("");
-  }
-
   return (
     <div className="space-y-2">
       <Label htmlFor="note-tags">Tags</Label>
-      <div className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-lg border border-input bg-transparent px-2 py-1.5 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
-        {tags.map((tag) => (
-          <Badge
-            key={tag}
-            variant="outline"
-            className="gap-1 rounded-md border-primary/30 bg-primary/8 px-2 py-1 font-mono text-[0.68rem] font-medium text-primary-strong"
-          >
-            #{tag}
-            <button
-              type="button"
-              aria-label={`Remove tag ${tag}`}
-              className="rounded-sm outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
-              onClick={() => onChange(tags.filter((item) => item !== tag))}
-              disabled={disabled}
-            >
-              <X aria-hidden="true" className="size-3" />
-            </button>
-          </Badge>
-        ))}
-        <input
-          id="note-tags"
-          value={value}
-          disabled={disabled}
-          onChange={(event) => setValue(event.target.value)}
-          onBlur={commitTag}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === ",") {
-              event.preventDefault();
-              commitTag();
-            }
-            if (event.key === "Backspace" && !value && tags.length > 0) {
-              onChange(tags.slice(0, -1));
-            }
-          }}
-          placeholder={tags.length ? "Add another" : "Add a tag"}
-          className="min-w-28 flex-1 bg-transparent px-1 py-0.5 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-        />
-      </div>
-      <SuggestedTags
-        selectedTags={tags}
-        suggestions={suggestedTags}
-        pending={suggestionsPending}
+      <TagPicker
+        id="note-tags"
+        tags={availableTags}
+        value={tags}
+        onChange={onChange}
+        onCreateTag={onCreateTag}
         disabled={disabled}
-        onSelect={addSuggestedTag}
       />
-      <p className="text-xs leading-5 text-muted-foreground">
-        Press Enter or comma after each tag.
-      </p>
     </div>
   );
 }
@@ -439,8 +365,8 @@ function NotePanelSkeleton() {
 function NotePanel({
   note,
   draft,
-  suggestedTags,
-  suggestionsPending,
+  availableTags,
+  onCreateTag,
   editing,
   saving,
   onDraftChange,
@@ -451,8 +377,8 @@ function NotePanel({
 }: {
   note: Note | null;
   draft: NoteDraft;
-  suggestedTags: string[];
-  suggestionsPending: boolean;
+  availableTags: Tag[];
+  onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   editing: boolean;
   saving: boolean;
   onDraftChange: (draft: NoteDraft) => void;
@@ -551,8 +477,8 @@ function NotePanel({
             </div>
             <TagEditor
               tags={draft.tags}
-              suggestedTags={suggestedTags}
-              suggestionsPending={suggestionsPending}
+              availableTags={availableTags}
+              onCreateTag={onCreateTag}
               disabled={saving}
               onChange={(tags) => onDraftChange({ ...draft, tags })}
             />
@@ -561,13 +487,12 @@ function NotePanel({
           <div className="mt-4 flex flex-wrap items-center gap-1.5">
             {note?.tags.length ? (
               note.tags.map((tag) => (
-                <Badge
+                <TagBadge
                   key={tag}
-                  variant="outline"
-                  className="rounded-md border-primary/30 bg-primary/8 px-2 py-1 font-mono text-[0.68rem] font-medium text-primary-strong"
-                >
-                  #{tag}
-                </Badge>
+                  name={tag}
+                  color={availableTags.find((item) => item.name === tag)?.color}
+                  active={availableTags.find((item) => item.name === tag)?.active ?? false}
+                />
               ))
             ) : (
               <span className="font-mono text-[0.66rem] uppercase tracking-[0.1em] text-muted-foreground">
@@ -637,20 +562,45 @@ function MemoryWorkspace() {
     queryKey: noteSummaryQueryKey,
     queryFn: getNoteSummary,
   });
+  const tagCatalogQuery = useQuery({
+    queryKey: tagsQueryKey,
+    queryFn: () => getTags(true),
+  });
+  const tagCatalog = useMemo(
+    () => tagCatalogQuery.data?.items ?? [],
+    [tagCatalogQuery.data?.items],
+  );
+  const noteFilterTags = useMemo(() => {
+    const summaryTags = noteSummaryQuery.data?.tags ?? [];
+    const selectedTag = urlState.tag
+      ? tagCatalog.find((tag) => tag.name === urlState.tag)
+      : undefined;
+
+    if (!selectedTag || summaryTags.some((tag) => tag.name === selectedTag.name)) {
+      return summaryTags;
+    }
+
+    return [
+      ...summaryTags,
+      {
+        name: selectedTag.name,
+        count: 0,
+        color: selectedTag.color,
+        active: selectedTag.active,
+      },
+    ];
+  }, [noteSummaryQuery.data?.tags, tagCatalog, urlState.tag]);
+  const createTagMutation = useMutation({
+    mutationFn: createTag,
+    onSuccess: (tag) => {
+      queryClient.setQueryData(tagsQueryKey, (current: { items: Tag[] } | undefined) => ({
+        items: [...(current?.items ?? []).filter((item) => item.id !== tag.id), tag],
+      }));
+    },
+  });
   const notes = useMemo(
     () => notesQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [notesQuery.data],
-  );
-  const availableTags = useMemo(
-    () =>
-      [...(noteSummaryQuery.data?.tags ?? [])]
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map((tag) => tag.name),
-    [noteSummaryQuery.data?.tags],
-  );
-  const suggestedTags = useMemo(
-    () => mostUsedTagNames(noteSummaryQuery.data?.tags ?? []),
-    [noteSummaryQuery.data?.tags],
   );
   const selectedNoteFromList = urlState.noteId
     ? notes.find((note) => note.id === urlState.noteId) ?? null
@@ -760,6 +710,7 @@ function MemoryWorkspace() {
         savedNote,
       );
       void queryClient.invalidateQueries({ queryKey: notesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: noteSummaryQueryKey });
       setDraft(noteToDraft(savedNote));
       setEditing(false);
       updateUrl((params) => params.set("note", savedNote.id));
@@ -784,6 +735,7 @@ function MemoryWorkspace() {
     onSuccess: () => {
       const deletedNoteId = pendingDelete?.id;
       void queryClient.invalidateQueries({ queryKey: notesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: noteSummaryQueryKey });
       setDeleteOpen(false);
       setPendingDelete(null);
       if (deletedNoteId && deletedNoteId === urlState.noteId) {
@@ -906,7 +858,7 @@ function MemoryWorkspace() {
         </div>
 
         <div className="mt-6 flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1 lg:max-w-xl">
+          <div className="relative w-full shrink-0 lg:max-w-xl">
             <Search
               aria-hidden="true"
               className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -928,38 +880,55 @@ function MemoryWorkspace() {
               className="h-10 pl-9"
             />
           </div>
-          <div className="flex items-center gap-2 overflow-x-auto pb-1" aria-label="Note tags">
-            <Button
-              type="button"
-              size="sm"
-              variant={!urlState.tag ? "secondary" : "ghost"}
-              aria-pressed={!urlState.tag}
-              onClick={() => updateUrl((params) => params.delete("tag"))}
-              className="shrink-0"
-            >
-              All
-            </Button>
-            {availableTags.map((tag) => (
+          <div className="min-w-0 flex-1" aria-label="Note tags">
+            <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-1">
               <Button
-                key={tag}
                 type="button"
                 size="sm"
-                variant={urlState.tag === tag ? "secondary" : "ghost"}
-                aria-pressed={urlState.tag === tag}
-                onClick={() =>
-                  updateUrl((params) => {
-                    if (urlState.tag === tag) {
-                      params.delete("tag");
-                    } else {
-                      params.set("tag", tag);
-                    }
-                  })
-                }
-                className="shrink-0 gap-1.5 font-mono text-xs"
+                variant={!urlState.tag ? "secondary" : "ghost"}
+                aria-pressed={!urlState.tag}
+                onClick={() => updateUrl((params) => params.delete("tag"))}
+                className="shrink-0"
               >
-                <Tag aria-hidden="true" className="size-3" />#{tag}
+                All
               </Button>
-            ))}
+              {noteSummaryQuery.isPending ? (
+                <span className="shrink-0 px-2 text-xs text-muted-foreground" role="status">
+                  Loading tags…
+                </span>
+              ) : noteSummaryQuery.isError ? (
+                <span className="shrink-0 px-2 text-xs text-muted-foreground" role="status">
+                  Tag filters unavailable
+                </span>
+              ) : noteFilterTags.length ? (
+                noteFilterTags.map((tag) => (
+                  <Button
+                    key={tag.name}
+                    type="button"
+                    size="sm"
+                    variant={urlState.tag === tag.name ? "secondary" : "ghost"}
+                    aria-pressed={urlState.tag === tag.name}
+                    onClick={() =>
+                      updateUrl((params) => {
+                        if (urlState.tag === tag.name) {
+                          params.delete("tag");
+                        } else {
+                          params.set("tag", tag.name);
+                        }
+                      })
+                    }
+                    className="shrink-0 gap-1.5 font-mono text-xs"
+                  >
+                    <TagBadge name={tag.name} color={tag.color} active={tag.active} />
+                    <span className="text-muted-foreground">{tag.count}</span>
+                  </Button>
+                ))
+              ) : (
+                <span className="shrink-0 px-2 text-xs text-muted-foreground">
+                  No note tags yet
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -1059,8 +1028,8 @@ function MemoryWorkspace() {
             <NotePanel
               note={selectedNote}
               draft={draft}
-              suggestedTags={suggestedTags}
-              suggestionsPending={noteSummaryQuery.isPending}
+              availableTags={tagCatalog}
+              onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
               editing={editing}
               saving={saveMutation.isPending}
               onDraftChange={setDraft}
@@ -1078,8 +1047,8 @@ function MemoryWorkspace() {
             <NotePanel
               note={null}
               draft={createBlankDraft()}
-              suggestedTags={suggestedTags}
-              suggestionsPending={noteSummaryQuery.isPending}
+              availableTags={tagCatalog}
+              onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
               editing={false}
               saving={false}
               onDraftChange={() => undefined}

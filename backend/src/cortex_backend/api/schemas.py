@@ -17,6 +17,8 @@ class ApiMetadataResponse(BaseModel):
 class ErrorResponse(BaseModel):
     code: str
     message: str
+    unknown_tags: list[str] | None = None
+    allowed_tags: list[str] | None = None
 
 
 class SetupRequest(BaseModel):

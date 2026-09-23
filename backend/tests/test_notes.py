@@ -18,6 +18,7 @@ from cortex_backend.memory.schemas import NoteCreateRequest
 from cortex_backend.memory.service import create_note as create_note_service
 from cortex_backend.memory.service import list_notes, summarize_notes
 from cortex_backend.storage import SQLiteStorage
+from cortex_backend.tasks.models import Tag
 
 
 def migrate(database_path: Path, monkeypatch) -> None:
@@ -90,6 +91,22 @@ async def setup_owner(client: AsyncClient) -> None:
         },
     )
     assert response.status_code == 201
+    for name in (
+        "journal",
+        "personal",
+        "work",
+        "focus",
+        "reflection",
+        "archive",
+        "agent",
+        "shared",
+    ):
+        tag = await client.post(
+            "/api/v1/tags",
+            headers=await csrf_headers(client),
+            json={"name": name},
+        )
+        assert tag.status_code == 201
 
 
 async def csrf_headers(client: AsyncClient) -> dict[str, str]:
@@ -301,9 +318,9 @@ async def test_note_summary_counts_active_tags_and_orders_by_usage(client: Async
     assert summary.status_code == 200
     assert summary.json() == {
         "tags": [
-            {"name": "focus", "count": 2},
-            {"name": "personal", "count": 2},
-            {"name": "work", "count": 1},
+            {"name": "focus", "count": 2, "color": "slate", "active": True},
+            {"name": "personal", "count": 2, "color": "slate", "active": True},
+            {"name": "work", "count": 1, "color": "slate", "active": True},
         ]
     }
 
@@ -349,6 +366,22 @@ async def test_note_service_is_owner_scoped(tmp_path, monkeypatch) -> None:
                         created_at=now,
                         updated_at=now,
                         password_changed_at=now,
+                    ),
+                    Tag(
+                        id="10000000-0000-0000-0000-000000000001",
+                        user_id="00000000-0000-0000-0000-000000000001",
+                        name="shared",
+                        color="slate",
+                        created_at=now,
+                        archived_at=None,
+                    ),
+                    Tag(
+                        id="10000000-0000-0000-0000-000000000002",
+                        user_id="00000000-0000-0000-0000-000000000002",
+                        name="shared",
+                        color="slate",
+                        created_at=now,
+                        archived_at=None,
                     ),
                 ]
             )

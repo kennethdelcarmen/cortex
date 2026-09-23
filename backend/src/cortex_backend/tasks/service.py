@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..storage import DatabaseStorage
+from ..tags.schemas import TagColor
+from ..tags.service import existing_tag_names, resolve_tag_names
 from .errors import (
     InvalidCursorError,
     InvalidTaskDatesError,
@@ -126,6 +128,8 @@ class TaskPage:
 class TaskTagSummaryRecord:
     name: str
     count: int
+    color: TagColor
+    active: bool
 
 
 @dataclass(frozen=True)
@@ -246,13 +250,16 @@ async def _replace_tags(
     tag_names: list[str] | tuple[str, ...] | None,
 ) -> None:
     normalized_names = normalize_tag_names(tag_names)
+    retained_names = await existing_tag_names(db, TaskTag, task_id)
+    resolved = await resolve_tag_names(
+        db,
+        user_id,
+        normalized_names,
+        retain_inactive=retained_names,
+    )
     await db.execute(delete(TaskTag).where(TaskTag.task_id == task_id))
     for name in normalized_names:
-        tag = await db.scalar(select(Tag).where(Tag.user_id == user_id, Tag.name == name).limit(1))
-        if tag is None:
-            tag = Tag(id=str(uuid4()), user_id=user_id, name=name, created_at=_utc_now())
-            db.add(tag)
-            await db.flush()
+        tag = resolved[name]
         db.add(TaskTag(task_id=task_id, tag_id=tag.id))
     await db.flush()
 
@@ -274,13 +281,16 @@ async def _replace_series_tags(
     tag_names: list[str] | tuple[str, ...],
 ) -> None:
     normalized_names = normalize_tag_names(tag_names)
+    retained_names = await existing_tag_names(db, TaskSeriesTag, series_id)
+    resolved = await resolve_tag_names(
+        db,
+        user_id,
+        normalized_names,
+        retain_inactive=retained_names,
+    )
     await db.execute(delete(TaskSeriesTag).where(TaskSeriesTag.series_id == series_id))
     for name in normalized_names:
-        tag = await db.scalar(select(Tag).where(Tag.user_id == user_id, Tag.name == name).limit(1))
-        if tag is None:
-            tag = Tag(id=str(uuid4()), user_id=user_id, name=name, created_at=_utc_now())
-            db.add(tag)
-            await db.flush()
+        tag = resolved[name]
         db.add(TaskSeriesTag(series_id=series_id, tag_id=tag.id))
     await db.flush()
 
@@ -938,7 +948,7 @@ async def summarize_tasks(
         )
 
         tag_rows = await db.execute(
-            select(Tag.name, func.count(TaskTag.task_id))
+            select(Tag.name, Tag.color, Tag.archived_at, func.count(TaskTag.task_id))
             .join(TaskTag, TaskTag.tag_id == Tag.id)
             .join(
                 Task,
@@ -949,10 +959,18 @@ async def summarize_tasks(
                 ),
             )
             .where(Tag.user_id == user_id)
-            .group_by(Tag.name)
+            .group_by(Tag.name, Tag.color, Tag.archived_at)
             .order_by(Tag.name.asc())
         )
-        tags = [TaskTagSummaryRecord(name=name, count=int(count)) for name, count in tag_rows.all()]
+        tags = [
+            TaskTagSummaryRecord(
+                name=name,
+                count=int(count),
+                color=TagColor(color),
+                active=archived_at is None,
+            )
+            for name, color, archived_at, count in tag_rows.all()
+        ]
 
         return TaskSummaryRecord(
             all=await db.scalar(base) or 0,

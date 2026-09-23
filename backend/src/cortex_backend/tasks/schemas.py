@@ -7,6 +7,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..tags.schemas import TagColor
+
 
 class TaskStatus(StrEnum):
     BACKLOG = "backlog"
@@ -232,6 +234,8 @@ class TaskListResponse(BaseModel):
 class TaskTagSummaryResponse(BaseModel):
     name: str
     count: int = Field(ge=0)
+    color: TagColor
+    active: bool
 
 
 class TaskSummaryResponse(BaseModel):
