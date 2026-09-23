@@ -398,7 +398,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
 
     @server.tool(name="create_note")
     async def create_note_tool(payload: NoteCreateRequest, ctx: Context) -> NoteResponse:
-        """Create an owner-scoped Markdown note."""
+        """Create an owner-scoped HTML note; legacy Markdown input is normalized."""
 
         del ctx
         try:
@@ -422,7 +422,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         cursor: str | None = None,
         ctx: Context | None = None,
     ) -> NoteListResponse:
-        """List owner-scoped notes with bounded cursor pagination."""
+        """List owner-scoped notes; response bodies are sanitized HTML."""
 
         del ctx
         try:
@@ -448,7 +448,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
 
     @server.tool(name="get_note")
     async def get_note_tool(note_id: str, ctx: Context) -> NoteResponse:
-        """Return one active owner-scoped note."""
+        """Return one active owner-scoped note with a sanitized HTML body."""
 
         del ctx
         try:
@@ -463,7 +463,7 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
         payload: NoteUpdateRequest,
         ctx: Context,
     ) -> NoteResponse:
-        """Apply a partial update to one active owner-scoped note."""
+        """Update a note; legacy Markdown input is normalized and the body is returned as HTML."""
 
         del ctx
         try:

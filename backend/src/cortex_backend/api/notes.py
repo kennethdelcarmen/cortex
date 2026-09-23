@@ -11,6 +11,8 @@ from ..memory.schemas import (
     NoteCreateRequest,
     NoteListResponse,
     NoteResponse,
+    NoteSummaryResponse,
+    NoteTagSummaryResponse,
     NoteUpdateRequest,
 )
 from ..memory.service import (
@@ -21,6 +23,7 @@ from ..memory.service import (
     get_note,
     list_notes,
     restore_note,
+    summarize_notes,
     update_note,
 )
 from ..storage import DatabaseStorage
@@ -62,6 +65,19 @@ async def create_note_route(
     except NoteError as exc:
         _raise_http(exc)
     return _response(record)
+
+
+@router.get("/summary", response_model=NoteSummaryResponse)
+async def note_summary_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> NoteSummaryResponse:
+    """Return active note tag usage for the authenticated owner."""
+
+    summary = await summarize_notes(storage, auth.user.id)
+    return NoteSummaryResponse(
+        tags=[NoteTagSummaryResponse(name=tag.name, count=tag.count) for tag in summary.tags]
+    )
 
 
 @router.get("", response_model=NoteListResponse)

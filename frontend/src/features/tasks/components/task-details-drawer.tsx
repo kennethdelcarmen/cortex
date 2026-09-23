@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Repeat2, SkipForward, Square, X } from "lucide-react";
+import { SuggestedTags } from "@/components/suggested-tags";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerTitle } from "@/components/ui/drawer";
@@ -25,6 +26,7 @@ import {
 } from "../recurrence";
 import {
   adjustDueDateForStart,
+  appendTagInput,
   localDateTimePartsToIso,
   parseTagInput,
   priorityOption,
@@ -44,6 +46,8 @@ type TaskDetailsDrawerProps = {
   task: Task | null;
   onOpenChange: (open: boolean) => void;
   onSaveField: (field: TaskEditableField, payload: TaskUpdateInput) => Promise<void>;
+  suggestedTags: string[];
+  suggestionsPending: boolean;
   onDeleteRequest: () => void;
   series: TaskSeries | null;
   isSeriesPending?: boolean;
@@ -140,6 +144,8 @@ export function TaskDetailsDrawer({
   task,
   onOpenChange,
   onSaveField,
+  suggestedTags,
+  suggestionsPending,
   onDeleteRequest,
   series,
   isSeriesPending = false,
@@ -153,6 +159,7 @@ export function TaskDetailsDrawer({
   const [values, setValues] = useState<TaskDraft>(() => taskToDraft(task));
   const [feedback, setFeedback] = useState<Partial<Record<TaskEditableField, FieldFeedback>>>({});
   const draftTaskId = useRef<string | null>(task?.id ?? null);
+  const tagsFieldRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (draftTaskId.current === (task?.id ?? null)) {
@@ -285,6 +292,17 @@ export function TaskDetailsDrawer({
       return next;
     });
     void saveField(field, nextValues);
+  }
+
+  function addSuggestedTag(tag: string) {
+    const nextTags = appendTagInput(values.tags, tag);
+    if (nextTags === values.tags) {
+      return;
+    }
+
+    const nextValues = { ...values, tags: nextTags };
+    setValues(nextValues);
+    void saveField("tags", nextValues);
   }
 
   const titleError = feedback.title?.state === "error";
@@ -518,7 +536,7 @@ export function TaskDetailsDrawer({
                   </section>
                 ) : null}
 
-                <div>
+                <div ref={tagsFieldRef}>
                   <Label htmlFor="task-details-tags" className="text-sm font-medium text-foreground">
                     Tags
                   </Label>
@@ -526,11 +544,24 @@ export function TaskDetailsDrawer({
                     id="task-details-tags"
                     value={values.tags}
                     onChange={(event) => updateValue("tags", event.target.value)}
-                    onBlur={() => void saveField("tags")}
+                    onBlur={(event) => {
+                      const relatedTarget = event.relatedTarget;
+                      if (relatedTarget instanceof Node && tagsFieldRef.current?.contains(relatedTarget)) {
+                        return;
+                      }
+
+                      void saveField("tags");
+                    }}
                     placeholder="work, home, focus"
                     aria-invalid={tagsError}
                     aria-describedby={tagsError ? "task-details-tags-error" : undefined}
                     className="mt-2 min-h-11 bg-background"
+                  />
+                  <SuggestedTags
+                    selectedTags={parseTagInput(values.tags)}
+                    suggestions={suggestedTags}
+                    pending={suggestionsPending}
+                    onSelect={addSuggestedTag}
                   />
                   <p className="mt-2 text-xs leading-5 text-muted-foreground">
                     Separate tags with commas. They will be normalized when saved.

@@ -40,6 +40,11 @@ uv run alembic upgrade head
 uv run uvicorn cortex_backend.app:app --reload
 ```
 
+If upgrading an existing installation, make a copy of the SQLite database
+before applying this migration. Migration `0007_notes_html_content` converts
+legacy Markdown note bodies to sanitized HTML and is intentionally
+forward-only; automatic downgrade cannot restore the original source.
+
 Owner setup requires a high-entropy `CORTEX_SETUP_SECRET`. The setup route is
 disabled when the secret is absent and can only create the first owner. Keep
 the value in the local-only `.env` file or a deployment secret store; never
@@ -79,7 +84,7 @@ The initial service exposes:
   and password-change operations.
 - `/api/v1/activity-logs` for authenticated activity-log append and history
   queries with filtering and cursor pagination.
-- `/api/v1/notes` for authenticated Markdown note and journal-entry CRUD,
+- `/api/v1/notes` for authenticated sanitized-HTML note and journal-entry CRUD,
   normalized tags, local full-text search, cursor pagination, soft deletion,
   and restoration.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
@@ -91,8 +96,10 @@ Activity records are append-only, owner-scoped, and support bounded listing
 with structured JSON metadata. Automatic task/auth event producers remain
 deferred.
 
-Notes store Markdown bodies, optional titles, optional date-only journal dates,
-and owner-scoped normalized tags. Note search uses the local SQLite FTS5
+Notes store sanitized HTML bodies, optional titles, optional date-only journal
+dates, and owner-scoped normalized tags. REST and MCP accept legacy Markdown
+input and normalize it to HTML before storage; note responses always return
+sanitized HTML in `body`. Note search uses the local SQLite FTS5
 extension and treats the `search` parameter as plain keywords with AND
 semantics; raw FTS operators are not part of the API contract. Normal note
 reads hide soft-deleted records, while `include_deleted=true` and the restore

@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, exists, or_, select, text
+from sqlalchemy import and_, delete, exists, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..storage import DatabaseStorage
 from ..tasks.models import Tag
+from .content import html_to_text
 from .errors import (
     InvalidNoteCursorError,
     InvalidNoteQueryError,
@@ -65,6 +66,21 @@ class NotePage:
 
     items: list[NoteRecord]
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class NoteTagSummaryRecord:
+    """A normalized note tag and the number of active notes using it."""
+
+    name: str
+    count: int
+
+
+@dataclass(frozen=True)
+class NoteSummaryRecord:
+    """Aggregate data used by the notes workspace."""
+
+    tags: list[NoteTagSummaryRecord]
 
 
 def _utc_now() -> datetime:
@@ -213,7 +229,7 @@ async def _sync_fts(db: AsyncSession, note: Note, tags: list[str]) -> None:
         {
             "note_id": note.id,
             "title": note.title or "",
-            "body": note.body,
+            "body": html_to_text(note.body),
             "tags": " ".join(tags),
         },
     )
@@ -240,7 +256,7 @@ async def create_note(
     user_id: str,
     payload: NoteCreateRequest,
 ) -> NoteRecord:
-    """Create one owner-scoped Markdown note."""
+    """Create one owner-scoped sanitized HTML note."""
 
     now = _utc_now()
     async with storage.session() as db:
@@ -410,4 +426,28 @@ async def list_notes(
         return NotePage(
             items=[_record(note, tags_by_note.get(note.id, [])) for note in page_rows],
             next_cursor=next_cursor,
+        )
+
+
+async def summarize_notes(storage: DatabaseStorage, user_id: str) -> NoteSummaryRecord:
+    """Return active note tag usage for the authenticated owner."""
+
+    async with storage.session() as db:
+        result = await db.execute(
+            select(Tag.name, func.count(NoteTag.note_id))
+            .join(NoteTag, NoteTag.tag_id == Tag.id)
+            .join(
+                Note,
+                and_(
+                    Note.id == NoteTag.note_id,
+                    Note.user_id == user_id,
+                    Note.deleted_at.is_(None),
+                ),
+            )
+            .where(Tag.user_id == user_id)
+            .group_by(Tag.name)
+            .order_by(func.count(NoteTag.note_id).desc(), Tag.name.asc())
+        )
+        return NoteSummaryRecord(
+            tags=[NoteTagSummaryRecord(name=name, count=int(count)) for name, count in result.all()]
         )

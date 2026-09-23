@@ -25,6 +25,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
+import { mostUsedTagNames } from "@/lib/tags";
 import { useActivityLogger } from "@/features/activity/hooks";
 import {
   createTask,
@@ -377,6 +378,10 @@ export function TasksPage({ email }: { email: string }) {
     queryFn: () => getTaskSummary(timezone),
     enabled: Boolean(timezone),
   });
+  const suggestedTags = useMemo(
+    () => mostUsedTagNames(summaryQuery.data?.tags ?? []),
+    [summaryQuery.data?.tags],
+  );
 
   const query = useInfiniteQuery({
     queryKey: taskListQueryKey,
@@ -1141,6 +1146,8 @@ export function TasksPage({ email }: { email: string }) {
         key={`create-${createDialogOpen ? "open" : "closed"}`}
         open={createDialogOpen}
         isSaving={createMutation.isPending}
+        suggestedTags={suggestedTags}
+        suggestionsPending={summaryQuery.isPending}
         initialStartAt={createDialogStartAt}
         onOpenChange={closeCreateDialog}
         onSubmit={handleCreate}
@@ -1149,6 +1156,8 @@ export function TasksPage({ email }: { email: string }) {
         key={`details-${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
         open={detailsDrawerOpen && Boolean(selectedTask)}
         task={selectedTask}
+        suggestedTags={suggestedTags}
+        suggestionsPending={summaryQuery.isPending}
         series={seriesQuery.data ?? null}
         isSeriesPending={Boolean(selectedTask?.series_id) && seriesQuery.isPending}
         isSeriesActionPending={seriesTransitionMutation.isPending || skipMutation.isPending}
@@ -1170,6 +1179,8 @@ export function TasksPage({ email }: { email: string }) {
         open={seriesEditOpen}
         series={seriesQuery.data ?? null}
         isSaving={seriesUpdateMutation.isPending}
+        suggestedTags={suggestedTags}
+        suggestionsPending={summaryQuery.isPending}
         onOpenChange={closeSeriesEdit}
         onSubmit={handleSeriesUpdate}
       />

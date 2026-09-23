@@ -350,3 +350,212 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+.memory-editor__toolbar {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  padding: 0.35rem;
+  box-shadow: 0 0.75rem 2rem color-mix(in oklab, var(--foreground) 8%, transparent);
+  backdrop-filter: blur(0.75rem);
+}
+
+.memory-editor__toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.memory-editor__toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.memory-editor__loading {
+  min-height: 20rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(90deg, color-mix(in oklab, var(--muted) 70%, transparent), color-mix(in oklab, var(--muted) 35%, transparent), color-mix(in oklab, var(--muted) 70%, transparent));
+  background-size: 200% 100%;
+  animation: memory-editor-loading 1.5s ease-in-out infinite;
+}
+
+.memory-editor__content,
+.memory-editor__content .tiptap {
+  min-height: 20rem;
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.8;
+}
+
+.memory-editor__content--editable {
+  margin-top: 1.25rem;
+}
+
+.memory-editor__content .tiptap {
+  outline: none;
+}
+
+.memory-editor__content .tiptap:focus-visible {
+  border-radius: 0.5rem;
+  outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
+  outline-offset: 0.5rem;
+}
+
+.memory-editor__content > * + *,
+.memory-editor__content .tiptap > * + * {
+  margin-top: 1rem;
+}
+
+.memory-editor__content h1,
+.memory-editor__content h2,
+.memory-editor__content h3,
+.memory-editor__content .tiptap h1,
+.memory-editor__content .tiptap h2,
+.memory-editor__content .tiptap h3 {
+  color: var(--foreground);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+
+.memory-editor__content h1,
+.memory-editor__content .tiptap h1 {
+  font-size: 1.7rem;
+}
+
+.memory-editor__content h2,
+.memory-editor__content .tiptap h2 {
+  font-size: 1.35rem;
+}
+
+.memory-editor__content h3,
+.memory-editor__content .tiptap h3 {
+  font-size: 1.1rem;
+}
+
+.memory-editor__content a {
+  color: var(--primary-strong);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.memory-editor__content blockquote {
+  border-left: 3px solid color-mix(in oklab, var(--primary-strong) 65%, transparent);
+  color: var(--muted-foreground);
+  padding-left: 1rem;
+}
+
+.memory-editor__content ul,
+.memory-editor__content ol {
+  padding-left: 1.5rem;
+}
+
+.memory-editor__content ul {
+  list-style: disc;
+}
+
+.memory-editor__content ol {
+  list-style: decimal;
+}
+
+.memory-editor__content code {
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--muted);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.86em;
+}
+
+.memory-editor__content pre {
+  overflow-x: auto;
+  border: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
+  background: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  padding: 1rem;
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.7;
+}
+
+.memory-editor__content pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.memory-editor__content ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.memory-editor__content ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.memory-editor__content ul[data-type="taskList"] li > label {
+  margin-top: 0.35rem;
+}
+
+.memory-editor__content ul[data-type="taskList"] li > label input {
+  accent-color: var(--primary-strong);
+}
+
+.memory-editor__content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.memory-editor__content th,
+.memory-editor__content td {
+  border: 1px solid var(--border);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+}
+
+.memory-editor__content th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.memory-editor__content--preview input[type="checkbox"] {
+  pointer-events: none;
+}
+
+@keyframes memory-editor-loading {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (max-width: 639px) {
+  .memory-editor__toolbar {
+    top: 0.5rem;
+  }
+
+  .memory-editor__toolbar-spacer {
+    display: none;
+  }
+
+  .memory-editor__toolbar > .memory-editor__toolbar-spacer + button {
+    margin-left: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-editor__loading {
+    animation: none;
+  }
+}

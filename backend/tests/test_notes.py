@@ -16,7 +16,7 @@ from cortex_backend.auth.models import User
 from cortex_backend.config import Settings
 from cortex_backend.memory.schemas import NoteCreateRequest
 from cortex_backend.memory.service import create_note as create_note_service
-from cortex_backend.memory.service import list_notes
+from cortex_backend.memory.service import list_notes, summarize_notes
 from cortex_backend.storage import SQLiteStorage
 
 
@@ -163,7 +163,8 @@ async def test_note_crud_tags_soft_delete_and_restore(client: AsyncClient) -> No
     assert created.status_code == 201
     body = created.json()
     assert body["title"] == "Morning pages"
-    assert body["body"].startswith("# Start")
+    assert body["body"].startswith("<h1>Start</h1>")
+    assert "Write the next useful thing." in body["body"]
     assert body["journal_date"] == "2027-01-15"
     assert body["tags"] == ["journal", "personal"]
     note_id = body["id"]
@@ -272,6 +273,37 @@ async def test_note_listing_filters_search_and_cursor(client: AsyncClient) -> No
     assert changed_filter.json()["detail"]["code"] == "invalid_note_cursor"
 
 
+async def test_note_summary_counts_active_tags_and_orders_by_usage(client: AsyncClient) -> None:
+    await setup_owner(client)
+    active_notes = [
+        {"body": "Work note", "tags": [" Work ", "WORK", "Focus"]},
+        {"body": "Focus note", "tags": ["focus", "Personal"]},
+        {"body": "Personal note", "tags": ["personal"]},
+    ]
+    for payload in active_notes:
+        response = await create_note(client, payload)
+        assert response.status_code == 201
+
+    deleted = await create_note(client, {"body": "Deleted note", "tags": ["focus", "archive"]})
+    assert deleted.status_code == 201
+    deleted_id = deleted.json()["id"]
+    deleted_response = await client.delete(
+        f"/api/v1/notes/{deleted_id}",
+        headers=await csrf_headers(client),
+    )
+    assert deleted_response.status_code == 204
+
+    summary = await client.get("/api/v1/notes/summary")
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "tags": [
+            {"name": "focus", "count": 2},
+            {"name": "personal", "count": 2},
+            {"name": "work", "count": 1},
+        ]
+    }
+
+
 async def test_note_mutations_require_csrf_proof(client: AsyncClient) -> None:
     await setup_owner(client)
     response = await client.post(
@@ -320,11 +352,23 @@ async def test_note_service_is_owner_scoped(tmp_path, monkeypatch) -> None:
     record = await create_note_service(
         storage,
         "00000000-0000-0000-0000-000000000001",
-        NoteCreateRequest(body="Private owner note"),
+        NoteCreateRequest(body="Private owner note", tags=["shared"]),
+    )
+    await create_note_service(
+        storage,
+        "00000000-0000-0000-0000-000000000002",
+        NoteCreateRequest(body="Private other note", tags=["shared"]),
     )
     other_page = await list_notes(storage, "00000000-0000-0000-0000-000000000002")
-    assert other_page.items == []
+    owner_page = await list_notes(storage, "00000000-0000-0000-0000-000000000001")
+    assert [note.body for note in owner_page.items] == ["<p>Private owner note</p>"]
+    assert [note.body for note in other_page.items] == ["<p>Private other note</p>"]
     assert record.user_id == "00000000-0000-0000-0000-000000000001"
+    owner_summary = await summarize_notes(
+        storage,
+        "00000000-0000-0000-0000-000000000001",
+    )
+    assert [(tag.name, tag.count) for tag in owner_summary.tags] == [("shared", 1)]
     await storage.close()
 
 

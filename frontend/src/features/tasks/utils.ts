@@ -260,6 +260,20 @@ export function tagsToInput(tags: string[]) {
   return tags.join(", ");
 }
 
+export function appendTagInput(value: string, tag: string) {
+  const normalizedTag = tag.trim().toLowerCase();
+  if (!normalizedTag || parseTagInput(value).includes(normalizedTag)) {
+    return value;
+  }
+
+  const trimmedValue = value.trimEnd();
+  if (!trimmedValue) {
+    return normalizedTag;
+  }
+
+  return `${trimmedValue}${trimmedValue.endsWith(",") ? " " : ", "}${normalizedTag}`;
+}
+
 export function formatDateTime(value: string | null) {
   if (!value) {
     return "No date set";

@@ -179,8 +179,85 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0006_notes_foundation",
+            "0007_notes_html_content",
         )
+
+
+def test_notes_migration_converts_bodies_and_rebuilds_search_index(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    monkeypatch.setenv("CORTEX_DATABASE_PATH", str(database_path))
+    backend_path = Path(__file__).parents[1]
+    environment = os.environ.copy()
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(backend_path / "alembic.ini"),
+            "upgrade",
+            "0006_notes_foundation",
+        ],
+        cwd=backend_path,
+        env=environment,
+        check=True,
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000001",
+                "owner@example.com",
+                "not-used",
+                1,
+                1,
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO notes "
+            "(id, user_id, title, body, journal_date, created_at, updated_at, deleted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000002",
+                "00000000-0000-0000-0000-000000000001",
+                "Legacy",
+                "# Legacy\n\nSearchable **body**.",
+                None,
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+                None,
+            ),
+        )
+        connection.commit()
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(backend_path / "alembic.ini"),
+            "upgrade",
+            "head",
+        ],
+        cwd=backend_path,
+        env=environment,
+        check=True,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        body = connection.execute("SELECT body FROM notes").fetchone()[0]
+        indexed = connection.execute(
+            "SELECT body FROM notes_fts WHERE notes_fts MATCH ?", ("Searchable",)
+        ).fetchone()[0]
+        assert body == "<h1>Legacy</h1>\n<p>Searchable <strong>body</strong>.</p>"
+        assert indexed == "Legacy Searchable body."
 
 
 def test_tasks_migration_downgrade_removes_task_schema(tmp_path, monkeypatch) -> None:

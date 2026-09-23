@@ -1,12 +1,10 @@
-import {
-  WorkspaceModuleRoute,
-} from "@/features/workspace/components/workspace-shell";
+import { MemoryRoute } from "@/features/memory/components/memory-page";
 
 export const metadata = {
   title: "Memory · Cortex",
   description: "The notes and reflections workspace for Cortex.",
 };
 
-export default function MemoryPage() {
-  return <WorkspaceModuleRoute moduleKey="memory" />;
+export default function MemoryRoutePage() {
+  return <MemoryRoute />;
 }

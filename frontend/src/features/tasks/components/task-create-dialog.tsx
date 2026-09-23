@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { SuggestedTags } from "@/components/suggested-tags";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
@@ -17,6 +18,7 @@ import {
 } from "../recurrence";
 import {
   adjustDueDateForStart,
+  appendTagInput,
   localDateTimePartsToIso,
   currentLocalDateInput,
   dueDateTimeAfterStart,
@@ -46,6 +48,8 @@ export type TaskFormValues = {
 type TaskCreateDialogProps = {
   open: boolean;
   isSaving: boolean;
+  suggestedTags: string[];
+  suggestionsPending: boolean;
   initialStartAt?: TaskDateTimeValue;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: TaskFormValues) => void;
@@ -100,6 +104,8 @@ function recurrenceDefaultsForStartChange(
 export function TaskCreateDialog({
   open,
   isSaving,
+  suggestedTags,
+  suggestionsPending,
   initialStartAt,
   onOpenChange,
   onSubmit,
@@ -330,6 +336,13 @@ export function TaskCreateDialog({
                 placeholder="work, home, focus"
                 className="mt-2 min-h-11 bg-background text-foreground"
                 disabled={isSaving}
+              />
+              <SuggestedTags
+                selectedTags={parseTagInput(values.tags)}
+                suggestions={suggestedTags}
+                pending={suggestionsPending}
+                disabled={isSaving}
+                onSelect={(tag) => updateValue("tags", appendTagInput(values.tags, tag))}
               />
               <p className="mt-2 text-xs leading-5 text-muted-foreground">
                 Separate tags with commas. They will be normalized when saved.

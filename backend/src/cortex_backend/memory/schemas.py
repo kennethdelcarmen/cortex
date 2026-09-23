@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-MAX_NOTE_BODY_LENGTH = 100_000
+from .content import normalize_note_body
 
 
 def _validate_optional_title(value: str | None) -> str | None:
@@ -21,16 +21,17 @@ def _validate_optional_title(value: str | None) -> str | None:
 def _validate_body(value: str | None) -> str | None:
     if value is None:
         return None
-    if not value.strip():
-        raise ValueError("body must have content")
-    return value
+    return normalize_note_body(value)
 
 
 class NoteCreateRequest(BaseModel):
-    """Validated input for creating one Markdown note."""
+    """Validated input for creating one canonical HTML note."""
 
     title: str | None = Field(default=None, max_length=200)
-    body: str = Field(min_length=1, max_length=MAX_NOTE_BODY_LENGTH)
+    body: str = Field(
+        min_length=1,
+        description="Note content as HTML; legacy Markdown input is normalized before storage.",
+    )
     journal_date: date | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
 
@@ -39,10 +40,13 @@ class NoteCreateRequest(BaseModel):
 
 
 class NoteUpdateRequest(BaseModel):
-    """Validated partial input for updating one Markdown note."""
+    """Validated partial input for updating one canonical HTML note."""
 
     title: str | None = Field(default=None, max_length=200)
-    body: str | None = Field(default=None, max_length=MAX_NOTE_BODY_LENGTH)
+    body: str | None = Field(
+        default=None,
+        description="Note content as HTML; legacy Markdown input is normalized before storage.",
+    )
     journal_date: date | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
 
@@ -55,7 +59,7 @@ class NoteResponse(BaseModel):
 
     id: str
     title: str | None
-    body: str
+    body: str = Field(description="Sanitized canonical HTML note content.")
     journal_date: date | None
     tags: list[str]
     created_at: datetime
@@ -68,3 +72,16 @@ class NoteListResponse(BaseModel):
 
     items: list[NoteResponse]
     next_cursor: str | None
+
+
+class NoteTagSummaryResponse(BaseModel):
+    """A normalized note tag and the number of active notes using it."""
+
+    name: str
+    count: int = Field(ge=0)
+
+
+class NoteSummaryResponse(BaseModel):
+    """Aggregate data used by the notes workspace."""
+
+    tags: list[NoteTagSummaryResponse]

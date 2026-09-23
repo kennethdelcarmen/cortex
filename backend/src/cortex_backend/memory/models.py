@@ -11,7 +11,7 @@ from ..auth.models import Base
 
 
 class Note(Base):
-    """An owner-scoped Markdown note or journal entry."""
+    """An owner-scoped sanitized HTML note or journal entry."""
 
     __tablename__ = "notes"
     __table_args__ = (

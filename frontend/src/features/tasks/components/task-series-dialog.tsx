@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { SuggestedTags } from "@/components/suggested-tags";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,7 +24,7 @@ import {
   recurrenceValuesToPayload,
   type RecurrenceFormValues,
 } from "../recurrence";
-import { parseTagInput, priorityOption, statusOption, TASK_PRIORITIES, TASK_STATUSES } from "../utils";
+import { appendTagInput, parseTagInput, priorityOption, statusOption, TASK_PRIORITIES, TASK_STATUSES } from "../utils";
 import { TaskOptionValue } from "./task-option-value";
 import { TaskRecurrenceBuilder } from "./task-recurrence-builder";
 
@@ -31,6 +32,8 @@ type TaskSeriesDialogProps = {
   open: boolean;
   series: TaskSeries | null;
   isSaving: boolean;
+  suggestedTags: string[];
+  suggestionsPending: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (payload: TaskSeriesUpdateInput) => void;
 };
@@ -71,6 +74,8 @@ export function TaskSeriesDialog({
   open,
   series,
   isSaving,
+  suggestedTags,
+  suggestionsPending,
   onOpenChange,
   onSubmit,
 }: TaskSeriesDialogProps) {
@@ -187,6 +192,13 @@ export function TaskSeriesDialog({
                 disabled={isSaving}
                 className="mt-2 min-h-11 bg-background"
                 placeholder="work, home, focus"
+              />
+              <SuggestedTags
+                selectedTags={parseTagInput(values.tags)}
+                suggestions={suggestedTags}
+                pending={suggestionsPending}
+                disabled={isSaving}
+                onSelect={(tag) => update("tags", appendTagInput(values.tags, tag))}
               />
               <p className="mt-2 text-xs leading-5 text-muted-foreground">Separate tags with commas.</p>
             </div>
