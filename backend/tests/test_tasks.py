@@ -58,7 +58,11 @@ async def setup_owner(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/auth/setup",
         headers={"X-Setup-Secret": "test-setup-secret"},
-        json={"email": "owner@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert response.status_code == 201
 

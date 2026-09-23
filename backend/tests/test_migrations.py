@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def upgrade_database(database_path: Path, monkeypatch) -> None:
+def upgrade_database(database_path: Path, monkeypatch, revision: str = "head") -> None:
     """Apply the checked-in migrations to a temporary database."""
 
     monkeypatch.setenv("CORTEX_DATABASE_PATH", str(database_path))
@@ -20,7 +20,7 @@ def upgrade_database(database_path: Path, monkeypatch) -> None:
             "-c",
             str(backend_path / "alembic.ini"),
             "upgrade",
-            "head",
+            revision,
         ],
         cwd=backend_path,
         env=os.environ.copy(),
@@ -37,10 +37,13 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             row[0]
             for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        assert {"alembic_version", "users", "sessions"} <= tables
+        assert {"alembic_version", "users", "sessions", "mcp_api_keys"} <= tables
 
         user_columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
         session_columns = {row[1] for row in connection.execute("PRAGMA table_info(sessions)")}
+        mcp_api_key_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(mcp_api_keys)")
+        }
         task_columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
         tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(tags)")}
         task_tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(task_tags)")}
@@ -63,6 +66,14 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "last_seen_at",
             "idle_expires_at",
             "absolute_expires_at",
+            "revoked_at",
+        }
+        assert mcp_api_key_columns == {
+            "id",
+            "user_id",
+            "key_hash",
+            "created_at",
+            "updated_at",
             "revoked_at",
         }
         assert task_columns == {
@@ -154,6 +165,8 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_sessions_token_hash",
             "ix_sessions_user_id",
             "ix_sessions_expiry_cleanup",
+            "uq_mcp_api_keys_user_id",
+            "uq_mcp_api_keys_key_hash",
             "ix_tasks_owner_deleted_status",
             "ix_tasks_owner_deleted_status_position",
             "ix_tasks_owner_deleted_priority",
@@ -179,8 +192,37 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0007_notes_html_content",
+            "0008_mcp_api_keys",
         )
+
+
+def test_mcp_key_migration_upgrades_existing_database(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0007_notes_html_content")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000001",
+                "owner@example.com",
+                "not-used",
+                1,
+                1,
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+                "2027-01-01T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM users").fetchone() == (1,)
+        assert connection.execute("SELECT COUNT(*) FROM mcp_api_keys").fetchone() == (0,)
 
 
 def test_notes_migration_converts_bodies_and_rebuilds_search_index(tmp_path, monkeypatch) -> None:

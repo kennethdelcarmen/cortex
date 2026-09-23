@@ -12,10 +12,10 @@ stored in an application data volume.
 
 The current backend implements a persistent SQLite foundation and a local-owner
 authentication slice. There is not yet a Compose configuration, container
-image, frontend, or domain functionality. Turso/libSQL, hosted services,
-mobile synchronization, external identity providers, password recovery, agent
-tokens, and semantic vector storage are optional or deferred rather than
-current backend requirements.
+image, or full domain functionality. Turso/libSQL, hosted services, mobile
+synchronization, external identity providers, password recovery, agent tokens,
+and semantic vector storage are optional or deferred rather than current
+backend requirements.
 
 ## Local setup
 
@@ -60,9 +60,26 @@ CORTEX_SETUP_SECRET='replace-with-a-high-entropy-secret' \
 curl -c cookies.txt \
   -H 'X-Setup-Secret: replace-with-a-high-entropy-secret' \
   -H 'Content-Type: application/json' \
-  -d '{"email":"owner@example.com","password":"replace-with-a-12-character-password"}' \
+  -d '{"email":"owner@example.com","password":"replace-with-a-12-character-password","mcp_api_key":"replace-with-a-32-character-or-longer-key"}' \
   http://127.0.0.1:8000/api/v1/auth/setup
 ```
+
+The setup request must choose exactly one MCP credential source. Provide a
+separate `mcp_api_key` with at least 32 characters, or use the setup secret
+explicitly instead:
+
+```json
+{
+  "email": "owner@example.com",
+  "password": "replace-with-a-12-character-password",
+  "use_setup_secret_as_mcp_key": true
+}
+```
+
+Cortex stores only a hash of the selected credential. If the setup secret is
+reused, it is hashed during owner creation and is not checked during normal
+MCP requests; it may be removed from the runtime environment afterward. Do
+not log or commit either raw credential.
 
 The response sets an HttpOnly `cortex_session` cookie and a readable
 `cortex_csrf` cookie. Call `GET /api/v1/auth/csrf` to rotate and return a CSRF
@@ -89,8 +106,32 @@ The initial service exposes:
   and restoration.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task, note, and activity-log operations to agents. MCP clients send the existing
-  session token as a bearer token in the `Authorization` header.
+  task, note, and activity-log operations to agents. MCP clients may send
+  either an existing session token or the configured static MCP key as a
+  bearer token in the `Authorization` header. Static keys are accepted only
+  on `/mcp`; REST endpoints continue to require the browser session and CSRF
+  protections.
+- `/api/v1/auth/mcp-key` for authenticated owners to inspect non-secret key
+  status, replace the key, or revoke it. The raw key is never returned. A
+  replacement invalidates the previous key; revocation leaves session-token
+  MCP access intact.
+
+To connect Codex using a static key, export it only in the shell or secret
+manager used to launch Codex and register the Streamable HTTP server:
+
+```bash
+export CORTEX_MCP_TOKEN='the-key-selected-during-setup'
+codex mcp add cortex \
+  --url http://127.0.0.1:8000/mcp/ \
+  --bearer-token-env-var CORTEX_MCP_TOKEN
+```
+
+When setup-secret reuse was selected, `CORTEX_MCP_TOKEN` should contain that
+same setup-secret value. The backend still authenticates against the stored
+hash after `CORTEX_SETUP_SECRET` is removed from its environment.
+
+Existing installations remain session-only until the owner creates a key in
+the authenticated settings UI or with `PUT /api/v1/auth/mcp-key`.
 
 Activity records are append-only, owner-scoped, and support bounded listing
 with structured JSON metadata. Automatic task/auth event producers remain

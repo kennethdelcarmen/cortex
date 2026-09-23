@@ -77,7 +77,11 @@ async def setup_owner(client: AsyncClient) -> None:
     response = await client.post(
         "/api/v1/auth/setup",
         headers={"X-Setup-Secret": "test-setup-secret"},
-        json={"email": "owner@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert response.status_code == 201
 
@@ -194,7 +198,7 @@ async def test_rest_activity_logs_append_filters_and_cursor_pagination(
         params={"limit": 2, "cursor": first_body["next_cursor"]},
     )
     assert second_page.status_code == 200
-    assert len(second_page.json()["items"]) == 1
+    assert len(second_page.json()["items"]) == 2
     assert second_page.json()["next_cursor"] is None
 
     filtered = await client.get(

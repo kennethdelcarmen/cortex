@@ -1,8 +1,8 @@
 import type { LucideIcon } from "lucide-react";
-import { BookOpen, Home, ListTodo, WalletCards } from "lucide-react";
+import { BookOpen, Home, ListTodo, Settings2, WalletCards } from "lucide-react";
 
 export type WorkspaceModule = "focus" | "memory" | "money";
-export type WorkspaceSection = "home" | WorkspaceModule;
+export type WorkspaceSection = "home" | WorkspaceModule | "settings";
 
 export type WorkspaceNavigationItem = {
   key: WorkspaceSection;
@@ -64,6 +64,13 @@ export const workspaceNavigation: WorkspaceNavigationItem[] = [
     icon: Home,
   },
   ...Object.values(moduleDefinitions),
+  {
+    key: "settings",
+    label: "Settings",
+    href: "/settings",
+    description: "Account and agent access",
+    icon: Settings2,
+  },
 ];
 
 export const captureOptions = [

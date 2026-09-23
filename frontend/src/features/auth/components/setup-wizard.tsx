@@ -35,6 +35,8 @@ const ownerDetailsSchema = z
       .min(12, "Use at least 12 characters.")
       .max(128, "Use 128 characters or fewer."),
     confirmation: z.string(),
+    mcpApiKey: z.string(),
+    useSetupSecretAsMcpKey: z.boolean(),
   })
   .superRefine((value, context) => {
     if (value.password !== value.confirmation) {
@@ -42,6 +44,16 @@ const ownerDetailsSchema = z
         code: "custom",
         path: ["confirmation"],
         message: "Passwords must match.",
+      });
+    }
+    if (!value.useSetupSecretAsMcpKey && value.mcpApiKey.length < 32) {
+      context.addIssue({
+        code: "too_small",
+        minimum: 32,
+        origin: "string",
+        inclusive: true,
+        path: ["mcpApiKey"],
+        message: "Use at least 32 characters.",
       });
     }
   });
@@ -56,11 +68,14 @@ export function SetupWizard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [mcpApiKey, setMcpApiKey] = useState("");
+  const [useSetupSecretAsMcpKey, setUseSetupSecretAsMcpKey] = useState(false);
   const [secretError, setSecretError] = useState<string>();
   const [errors, setErrors] = useState<{
     email?: string;
     password?: string;
     confirmation?: string;
+    mcpApiKey?: string;
   }>({});
   const [blockingError, setBlockingError] = useState<SetupBlockingError>();
 
@@ -113,6 +128,7 @@ export function SetupWizard() {
       setSetupSecret("");
       setPassword("");
       setConfirmation("");
+      setMcpApiKey("");
       router.replace("/");
     },
     onError: (error) => {
@@ -160,17 +176,29 @@ export function SetupWizard() {
 
   function submitOwnerDetails() {
     setBlockingError(undefined);
-    const result = ownerDetailsSchema.safeParse({ email, password, confirmation });
+    const result = ownerDetailsSchema.safeParse({
+      email,
+      password,
+      confirmation,
+      mcpApiKey,
+      useSetupSecretAsMcpKey,
+    });
 
     if (!result.success) {
       const nextErrors: {
         email?: string;
         password?: string;
         confirmation?: string;
+        mcpApiKey?: string;
       } = {};
       for (const issue of result.error.issues) {
         const field = issue.path[0];
-        if (field === "email" || field === "password" || field === "confirmation") {
+        if (
+          field === "email" ||
+          field === "password" ||
+          field === "confirmation" ||
+          field === "mcpApiKey"
+        ) {
           nextErrors[field] = issue.message;
         }
       }
@@ -183,6 +211,8 @@ export function SetupWizard() {
       email: result.data.email,
       password: result.data.password,
       setupSecret,
+      mcpApiKey: result.data.mcpApiKey || undefined,
+      useSetupSecretAsMcpKey: result.data.useSetupSecretAsMcpKey,
     });
   }
 
@@ -362,6 +392,53 @@ export function SetupWizard() {
             error={errors.confirmation}
             disabled={mutation.isPending}
           />
+          <div className="space-y-3 rounded-xl border border-border/70 bg-card/40 p-4">
+            <div>
+              <h3 className="text-sm font-medium text-foreground">Codex access</h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Cortex can accept a long-lived bearer key for MCP tools. Store it in your
+                password manager; it will not be shown again.
+              </p>
+            </div>
+            <label className="flex items-start gap-3 text-sm text-foreground">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 rounded border-input accent-primary focus-visible:ring-3 focus-visible:ring-ring/50"
+                checked={useSetupSecretAsMcpKey}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setUseSetupSecretAsMcpKey(checked);
+                  if (checked) {
+                    setMcpApiKey("");
+                    setErrors((current) => ({ ...current, mcpApiKey: undefined }));
+                  }
+                }}
+                disabled={mutation.isPending}
+              />
+              <span>
+                <span className="block font-medium">Use setup secret as MCP key</span>
+                <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                  Convenient for local use. You can rotate or revoke it later from Settings.
+                </span>
+              </span>
+            </label>
+            {!useSetupSecretAsMcpKey ? (
+              <PasswordField
+                id="setup-mcp-api-key"
+                name="mcp-api-key"
+                label="MCP access key"
+                hint="At least 32 characters. Codex sends this as a bearer token."
+                autoComplete="new-password"
+                value={mcpApiKey}
+                onChange={(event) => {
+                  setMcpApiKey(event.target.value);
+                  setErrors((current) => ({ ...current, mcpApiKey: undefined }));
+                }}
+                error={errors.mcpApiKey}
+                disabled={mutation.isPending}
+              />
+            ) : null}
+          </div>
           <div className="grid gap-3 sm:grid-cols-[auto_1fr]">
             <Button
               type="button"

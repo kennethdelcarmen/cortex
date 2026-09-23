@@ -28,6 +28,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    mcp_api_key: Mapped["McpApiKey | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 Index(
@@ -72,3 +77,26 @@ Index(
     AuthSession.idle_expires_at,
     AuthSession.absolute_expires_at,
 )
+
+
+class McpApiKey(Base):
+    """A revocable, owner-scoped bearer credential for MCP clients."""
+
+    __tablename__ = "mcp_api_keys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="mcp_api_key")
+
+
+Index("uq_mcp_api_keys_user_id", McpApiKey.user_id, unique=True)
+Index("uq_mcp_api_keys_key_hash", McpApiKey.key_hash, unique=True)

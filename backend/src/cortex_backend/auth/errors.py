@@ -56,3 +56,12 @@ class InvalidCurrentPasswordError(AuthError):
             "The current password is incorrect.",
             400,
         )
+
+
+class InvalidMcpApiKeyConfigurationError(AuthError):
+    def __init__(self) -> None:
+        super().__init__(
+            "invalid_mcp_api_key_configuration",
+            "The MCP access key configuration is invalid.",
+            422,
+        )

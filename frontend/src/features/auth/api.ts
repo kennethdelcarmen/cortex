@@ -7,6 +7,14 @@ const userResponseSchema = z.object({
   created_at: z.string().min(1),
 });
 
+const mcpApiKeyResponseSchema = z.object({
+  configured: z.boolean(),
+  revoked: z.boolean(),
+  created_at: z.string().nullable(),
+  updated_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+});
+
 export type User = z.infer<typeof userResponseSchema>;
 
 export const authQueryKey = ["auth", "me"] as const;
@@ -27,6 +35,8 @@ export async function setupOwner(input: {
   email: string;
   password: string;
   setupSecret: string;
+  mcpApiKey?: string;
+  useSetupSecretAsMcpKey: boolean;
 }): Promise<User> {
   return apiFetch(
     "/api/v1/auth/setup",
@@ -38,10 +48,33 @@ export async function setupOwner(input: {
       body: JSON.stringify({
         email: input.email.trim(),
         password: input.password,
+        mcp_api_key: input.mcpApiKey,
+        use_setup_secret_as_mcp_key: input.useSetupSecretAsMcpKey,
       }),
     },
     userResponseSchema,
   );
+}
+
+export type McpApiKeyStatus = z.infer<typeof mcpApiKeyResponseSchema>;
+
+export async function getMcpApiKeyStatus(): Promise<McpApiKeyStatus> {
+  return apiFetch("/api/v1/auth/mcp-key", {}, mcpApiKeyResponseSchema);
+}
+
+export async function replaceMcpApiKey(key: string): Promise<McpApiKeyStatus> {
+  return apiFetch(
+    "/api/v1/auth/mcp-key",
+    {
+      method: "PUT",
+      body: JSON.stringify({ key }),
+    },
+    mcpApiKeyResponseSchema,
+  );
+}
+
+export async function revokeMcpApiKey(): Promise<void> {
+  await apiFetch<void>("/api/v1/auth/mcp-key", { method: "DELETE" });
 }
 
 export async function verifySetupSecret(setupSecret: string): Promise<void> {
@@ -88,6 +121,8 @@ export function describeAuthError(error: unknown): string {
       return "This installation already has an owner. Sign in instead.";
     case "setup_not_configured":
       return "Owner setup is not available yet. Set CORTEX_SETUP_SECRET before trying again.";
+    case "invalid_mcp_api_key_configuration":
+      return "Use a separate MCP key with at least 32 characters, or choose the setup secret option.";
     case "invalid_credentials":
       return "That email or password did not match. Try again.";
     case "invalid_response":

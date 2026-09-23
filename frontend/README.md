@@ -19,8 +19,10 @@ browser session and CSRF cookies are host-scoped. The browser API URL is
 configured with NEXT_PUBLIC_API_URL. The backend must allow http://localhost:3000
 in CORTEX_CORS_ORIGINS before authenticated requests are made. On a new
 installation, open /setup, enter the CORTEX_SETUP_SECRET configured for the
-backend, and verify it before creating the first owner account. Returning users
-can sign in at /login.
+backend, and choose either a separate 32-character-or-longer MCP key or the
+explicit setup-secret reuse option before creating the first owner account.
+Returning users can sign in at /login. Authenticated owners can later rotate
+or revoke the MCP key from /settings; the raw key is never displayed again.
 
 ## Project conventions
 

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class HealthResponse(BaseModel):
@@ -22,6 +22,14 @@ class ErrorResponse(BaseModel):
 class SetupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
+    mcp_api_key: str | None = Field(default=None, min_length=32, max_length=256)
+    use_setup_secret_as_mcp_key: bool = False
+
+    @model_validator(mode="after")
+    def require_one_mcp_credential_source(self) -> "SetupRequest":
+        if (self.mcp_api_key is not None) == self.use_setup_secret_as_mcp_key:
+            raise ValueError("Choose exactly one of mcp_api_key or use_setup_secret_as_mcp_key.")
+        return self
 
 
 class LoginRequest(BaseModel):
@@ -42,3 +50,15 @@ class UserResponse(BaseModel):
 
 class CsrfResponse(BaseModel):
     csrf_token: str
+
+
+class McpApiKeyUpdateRequest(BaseModel):
+    key: str = Field(min_length=32, max_length=256)
+
+
+class McpApiKeyResponse(BaseModel):
+    configured: bool
+    revoked: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+    revoked_at: datetime | None

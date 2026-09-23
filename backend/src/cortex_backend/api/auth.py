@@ -14,11 +14,15 @@ from ..auth.security import (
 from ..auth.service import (
     AuthResult,
     CurrentAuth,
+    McpApiKeyRecord,
     UserRecord,
     change_password,
+    get_mcp_api_key,
     login,
     logout,
     refresh_csrf_token,
+    replace_mcp_api_key,
+    revoke_mcp_api_key,
     setup_owner,
     validate_setup_secret,
 )
@@ -36,6 +40,8 @@ from .schemas import (
     ChangePasswordRequest,
     CsrfResponse,
     LoginRequest,
+    McpApiKeyResponse,
+    McpApiKeyUpdateRequest,
     SetupRequest,
     UserResponse,
 )
@@ -87,6 +93,24 @@ def _clear_auth_cookies(response: Response, settings: Settings) -> None:
     response.delete_cookie(CSRF_COOKIE_NAME, secure=secure, samesite="lax", path="/")
 
 
+def _mcp_api_key_response(record: McpApiKeyRecord | None) -> McpApiKeyResponse:
+    if record is None:
+        return McpApiKeyResponse(
+            configured=False,
+            revoked=False,
+            created_at=None,
+            updated_at=None,
+            revoked_at=None,
+        )
+    return McpApiKeyResponse(
+        configured=True,
+        revoked=record.revoked_at is not None,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        revoked_at=record.revoked_at,
+    )
+
+
 def _validate_public_origin(request: Request, settings: Settings) -> None:
     """Translate invalid origins into the same stable CSRF response as protected routes."""
 
@@ -128,6 +152,8 @@ async def setup(
             str(payload.email),
             payload.password,
             request.headers.get("x-setup-secret"),
+            payload.mcp_api_key,
+            payload.use_setup_secret_as_mcp_key,
         )
     except AuthError as exc:
         _raise_http(exc)
@@ -187,6 +213,41 @@ async def csrf_token(
         path="/",
     )
     return CsrfResponse(csrf_token=token)
+
+
+@router.get("/mcp-key", response_model=McpApiKeyResponse)
+async def mcp_key_status(
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+) -> McpApiKeyResponse:
+    """Return MCP key lifecycle metadata without exposing the key."""
+
+    return _mcp_api_key_response(await get_mcp_api_key(storage, auth.user.id))
+
+
+@router.put("/mcp-key", response_model=McpApiKeyResponse)
+async def update_mcp_key(
+    payload: McpApiKeyUpdateRequest,
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+) -> McpApiKeyResponse:
+    """Create or rotate the static MCP bearer key."""
+
+    try:
+        record = await replace_mcp_api_key(storage, auth.user.id, payload.key)
+    except AuthError as exc:
+        _raise_http(exc)
+    return _mcp_api_key_response(record)
+
+
+@router.delete("/mcp-key", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_mcp_key(
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+) -> None:
+    """Revoke the static MCP bearer key without revoking browser sessions."""
+
+    await revoke_mcp_api_key(storage, auth.user.id)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

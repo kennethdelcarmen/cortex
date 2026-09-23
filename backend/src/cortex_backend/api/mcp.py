@@ -7,13 +7,13 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..auth.errors import AuthError
-from ..auth.service import CurrentAuth, authenticate_session
+from ..auth.service import McpAuth, authenticate_mcp_token
 from ..storage import DatabaseStorage, Storage
 
-_current_mcp_auth: ContextVar[CurrentAuth] = ContextVar("current_mcp_auth")
+_current_mcp_auth: ContextVar[McpAuth] = ContextVar("current_mcp_auth")
 
 
-def get_mcp_auth() -> CurrentAuth:
+def get_mcp_auth() -> McpAuth:
     """Return the owner authenticated by the current MCP HTTP request."""
 
     try:
@@ -58,7 +58,7 @@ class MCPAuthMiddleware:
             return
 
         try:
-            auth = await authenticate_session(self.storage, token)
+            auth = await authenticate_mcp_token(self.storage, token)
         except AuthError as exc:
             await JSONResponse(
                 status_code=exc.status_code,

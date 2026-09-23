@@ -68,7 +68,11 @@ async def setup_owner(client: AsyncClient) -> dict[str, object]:
     response = await client.post(
         "/api/v1/auth/setup",
         headers={"X-Setup-Secret": "test-setup-secret"},
-        json={"email": "Owner@Example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "Owner@Example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert response.status_code == 201
     return response.json()
@@ -85,7 +89,11 @@ async def test_setup_creates_owner_session_and_is_one_time(client: AsyncClient) 
     second = await client.post(
         "/api/v1/auth/setup",
         headers={"X-Setup-Secret": "test-setup-secret"},
-        json={"email": "other@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "other@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert second.status_code == 409
     assert second.json() == {
@@ -100,7 +108,11 @@ async def test_setup_fails_closed_without_or_with_wrong_secret(client: AsyncClie
     client._transport.app.state.settings.setup_secret = None
     missing = await client.post(
         "/api/v1/auth/setup",
-        json={"email": "owner@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert missing.status_code == 503
 
@@ -108,7 +120,11 @@ async def test_setup_fails_closed_without_or_with_wrong_secret(client: AsyncClie
     invalid = await client.post(
         "/api/v1/auth/setup",
         headers={"X-Setup-Secret": "wrong"},
-        json={"email": "owner@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
     assert invalid.status_code == 403
 
@@ -159,7 +175,11 @@ async def test_setup_rejects_cross_origin_requests(client: AsyncClient) -> None:
             "Origin": "https://attacker.example",
             "X-Setup-Secret": "test-setup-secret",
         },
-        json={"email": "owner@example.com", "password": "correct horse battery staple"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct horse battery staple",
+            "use_setup_secret_as_mcp_key": True,
+        },
     )
 
     assert response.status_code == 403
@@ -272,7 +292,11 @@ async def test_concurrent_setup_preserves_single_owner(tmp_path, monkeypatch) ->
                 response = await test_client.post(
                     "/api/v1/auth/setup",
                     headers={"X-Setup-Secret": "test-setup-secret"},
-                    json={"email": email, "password": "correct horse battery staple"},
+                    json={
+                        "email": email,
+                        "password": "correct horse battery staple",
+                        "use_setup_secret_as_mcp_key": True,
+                    },
                 )
                 return response.status_code
 
