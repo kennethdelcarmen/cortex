@@ -17,6 +17,38 @@ synchronization, external identity providers, password recovery, agent tokens,
 and semantic vector storage are optional or deferred rather than current
 backend requirements.
 
+## Minimum system requirements
+
+Cortex is self-hosting friendly: the core service stores data locally in SQLite
+and the local filesystem. It does not require a Cortex-operated cloud service,
+hosted OCR provider, or external identity provider.
+
+For the current native development/runtime setup, use:
+
+- A 64-bit macOS or Linux system. The planned Docker Compose deployment targets
+  Linux, VPS, and NAS environments; a production container image is not yet
+  included in this repository.
+- Python 3.12.x and `uv` for the backend. The backend declares Python
+  `>=3.12,<3.13`.
+- Node.js 20.9 or newer and pnpm for the Next.js frontend. The current Next.js
+  package requires Node.js `>=20.9.0`.
+- A writable persistent data volume for the SQLite database and `data/files`.
+  Keep those two data sets together for backup and restore.
+- LibreOffice for Office-to-PDF conversion and Tesseract OCR plus the required
+  language data for image text extraction. These are local system packages,
+  not hosted services.
+
+As an initial practical baseline for one local owner—not a load-tested capacity
+guarantee—use at least 2 CPU cores, 4 GB RAM, and 2 GB of free application
+storage, plus additional space for uploaded files, derived artifacts, database
+growth, and backups. Larger documents and concurrent processing need more CPU,
+memory, and storage.
+
+The service can start without LibreOffice or Tesseract, but file processing will
+be reported as degraded. Uploads, downloads, and supported processing paths
+remain available; install the missing tool and retry affected files after
+restarting the backend.
+
 ## Local setup
 
 Run commands from this directory:
@@ -32,12 +64,52 @@ The local runtime uses SQLite at `data/cortex.db` by default. Set
 created when migrations run or `/readyz` first checks storage, and the default
 `data/` directory is ignored by Git.
 
-Uploaded file bytes are stored below `data/files` by default. Set
-`CORTEX_FILE_STORAGE_PATH` to move that directory, and set
-`CORTEX_FILE_MAX_SIZE_BYTES` to change the per-file upload limit (25 MiB by
-default). The file directory and SQLite database must be backed up and restored
-together. File metadata is migrated by `0010_files_foundation`; its downgrade
-removes metadata only and does not delete stored bytes.
+Uploaded source bytes and derived context artifacts are stored below
+`data/files` by default. Set `CORTEX_FILE_STORAGE_PATH` to move that directory,
+and set `CORTEX_FILE_MAX_SIZE_BYTES` to change the per-file upload limit (25 MiB
+by default). The file directory and SQLite database must be backed up and
+restored together: the database contains source metadata, durable processing
+jobs, and artifact manifests, while the filesystem contains raw and derived
+bytes. File migrations `0011_file_context_pipeline` and
+`0012_normalize_file_context_timestamps` are forward-only for normal
+operations; the first migration's downgrade is backup-only because the removed
+upload MIME metadata cannot be reconstructed.
+
+File processing runs in a restart-safe local worker. Configure
+`CORTEX_FILE_PROCESSING_ENABLED`, `CORTEX_FILE_PROCESSING_POLL_SECONDS`,
+`CORTEX_FILE_PROCESSING_LEASE_SECONDS`, `CORTEX_FILE_PROCESSING_MAX_ATTEMPTS`,
+and `CORTEX_FILE_PROCESSING_TIMEOUT_SECONDS` for worker behavior. Office
+sources use a headless LibreOffice-compatible `soffice` command, selected with
+`CORTEX_FILE_CONVERTER_COMMAND`; archive-based Office formats retain a text
+fallback when PDF conversion is unavailable. Image OCR uses Tesseract, selected
+with `CORTEX_FILE_OCR_COMMAND`, and `CORTEX_FILE_OCR_LANGUAGE` (default `eng`)
+selects the installed language data. The worker searches the process PATH and
+common macOS/Linux install locations, but it does not install system tools.
+Install and verify the tools before enabling production processing, for example:
+
+```bash
+# macOS with Homebrew
+brew install --cask libreoffice
+brew install tesseract
+soffice --headless --version
+tesseract --version
+tesseract --list-langs
+
+# Debian/Ubuntu
+sudo apt-get install libreoffice tesseract-ocr tesseract-ocr-eng
+soffice --headless --version
+tesseract --list-langs
+```
+
+Set `CORTEX_FILE_OCR_LANGUAGE` to an installed language code, or a `+`-joined
+combination such as `eng+deu`. Missing tools make `/readyz` report
+`status: "degraded"` with stable capability warnings while uploads and source
+downloads remain available. Missing executables fail fast without consuming
+automatic retry attempts; use the file retry action after fixing the runtime.
+PDF extraction uses the backend's bundled PDF adapter. Audio and video are
+retained as immutable sources but remain unsupported until extractors are
+added. Processing failures retain the raw source and no automatic purge is
+included.
 
 Apply schema migrations explicitly before starting the service:
 
@@ -46,6 +118,11 @@ uv sync
 uv run alembic upgrade head
 uv run uvicorn cortex_backend.app:app --reload
 ```
+
+The service does not run Alembic automatically. When file processing is
+enabled, `/readyz` remains unavailable until the database and file-processing
+worker have both completed their readiness checks; `/healthz` remains
+dependency-free.
 
 If upgrading an existing installation, make a copy of the SQLite database
 before applying this migration. Migration `0007_notes_html_content` converts
@@ -116,12 +193,15 @@ The initial service exposes:
   `amber`, `slate`, `plum`, `violet`, `sand`, or `destructive`, and can be
   archived and restored without removing historical note or task memberships.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
-- `/api/v1/files` for authenticated multipart uploads, metadata listing,
-  attachment downloads, renames, soft deletion, and restoration. Files are
-  stored as opaque local objects; content extraction, previews, and indexing are
-  deferred.
+- `/api/v1/files` for authenticated multipart uploads, immutable source
+  metadata listing, attachment downloads, bounded processing status/context,
+  authenticated derived preview streams, soft deletion, restoration, and
+  processing retries. Raw `/content` downloads always use attachment
+  semantics. The backend owns Office conversion, PDF text extraction, and
+  image OCR; browser-side file parsers are not part of the storage contract.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task, note, activity-log, and file-metadata operations to agents. MCP clients
+  task, note, activity-log, and immutable file-metadata/context operations to
+  agents. MCP clients
   may send either an existing session token or the configured static MCP key as
   a bearer token in the `Authorization` header. Static keys are accepted only
   on `/mcp`; REST endpoints continue to require the browser session and CSRF
@@ -195,11 +275,12 @@ uv run mypy src
 ```
 
 The backend now has a persistent SQLite storage foundation, versioned auth,
-task, recurrence, activity-log, and notes schemas, local-owner authentication,
-and shared REST/MCP domain slices. Knowledge, finance, and self-hosting
-packaging remain deferred. To roll back the application after the additive task,
-recurrence, activity-log, and notes migrations, deploy the previous application
-while leaving the new tables in place. Only run a downgrade against a backed-up
-local database when intentionally removing these schemas.
+task, recurrence, activity-log, notes, and immutable file-context schemas, local-
+owner authentication, and shared REST/MCP domain slices. Knowledge, finance,
+and self-hosting packaging remain deferred. To roll back the application after
+the additive file-context migration, deploy the previous application while
+leaving the new tables and derived artifacts in place. Only run a downgrade
+against a backed-up local database when intentionally removing these schemas;
+restore the database, raw files, and derived artifacts as one backup set.
 Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
-removing the task, recurrence, activity-log, and notes schemas together.
+removing the task, recurrence, activity-log, notes, and file schemas together.

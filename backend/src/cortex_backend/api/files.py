@@ -21,17 +21,20 @@ from fastapi.responses import StreamingResponse
 from ..auth.service import CurrentAuth
 from ..config import Settings
 from ..files.errors import FileError
-from ..files.schemas import FileListResponse, FileRenameRequest, FileResponse
+from ..files.schemas import FileContextResponse, FileListResponse, FileResponse
 from ..files.service import (
+    FileContextRecord,
     FileListFilters,
     FileRecord,
     create_file,
     delete_file,
     get_file,
+    get_file_context,
     list_files,
-    rename_file,
     restore_file,
+    retry_file_context,
     stream_file,
+    stream_preview,
 )
 from ..files.storage import FileBlobStore
 from ..storage import DatabaseStorage
@@ -57,12 +60,25 @@ def _response(record: FileRecord) -> FileResponse:
     return FileResponse(
         id=record.id,
         name=record.name,
-        media_type=record.media_type,
         size_bytes=record.size_bytes,
         sha256=record.sha256,
+        context_status=record.context_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
+    )
+
+
+def _context_response(record: FileContextRecord) -> FileContextResponse:
+    return FileContextResponse(
+        file_id=record.file_id,
+        name=record.name,
+        status=record.status,
+        text=record.text,
+        truncated=record.truncated,
+        preview_kind=record.preview_kind,
+        error=record.error,
+        processed_at=record.processed_at,
     )
 
 
@@ -76,14 +92,15 @@ async def _upload_chunks(upload: UploadFile) -> AsyncIterator[bytes]:
         yield chunk
 
 
-def _content_disposition(filename: str) -> str:
+def _content_disposition(filename: str, *, inline: bool = False) -> str:
     """Build a safe attachment header with an ASCII fallback and UTF-8 name."""
 
     fallback = "".join(
         character if 32 <= ord(character) < 127 and character not in {'"', "\\"} else "_"
         for character in filename
     )
-    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+    disposition = "inline" if inline else "attachment"
+    return f"{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 @router.post("", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
@@ -102,7 +119,6 @@ async def upload_file_route(
             file_storage,
             auth.user.id,
             file.filename,
-            file.content_type,
             _upload_chunks(file),
             settings.file_max_size_bytes,
         )
@@ -152,10 +168,58 @@ async def download_file_route(
         _raise_http(exc)
     return StreamingResponse(
         stream,
-        media_type=record.media_type,
+        media_type="application/octet-stream",
         headers={
             "Content-Length": str(record.size_bytes),
             "Content-Disposition": _content_disposition(record.name),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/{file_id}/preview", response_model=FileContextResponse)
+async def preview_file_route(
+    file_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    file_storage: Annotated[FileBlobStore, Depends(get_file_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    max_characters: Annotated[int, Query(ge=1, le=100_000)] = 20_000,
+) -> FileContextResponse:
+    """Return bounded derived context and preview state."""
+
+    try:
+        record = await get_file_context(
+            storage,
+            file_storage,
+            auth.user.id,
+            file_id,
+            max_characters,
+        )
+    except FileError as exc:
+        _raise_http(exc)
+    return _context_response(record)
+
+
+@router.get("/{file_id}/preview/content")
+async def preview_content_route(
+    file_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    file_storage: Annotated[FileBlobStore, Depends(get_file_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> StreamingResponse:
+    """Stream a safe derived preview representation."""
+
+    try:
+        preview = await stream_preview(storage, file_storage, auth.user.id, file_id)
+        record = await get_file(storage, auth.user.id, file_id)
+    except FileError as exc:
+        _raise_http(exc)
+    return StreamingResponse(
+        preview.stream,
+        media_type=preview.media_type,
+        headers={
+            "Content-Length": str(preview.size_bytes),
+            "Content-Disposition": _content_disposition(record.name, inline=True),
             "X-Content-Type-Options": "nosniff",
         },
     )
@@ -171,22 +235,6 @@ async def get_file_route(
 
     try:
         record = await get_file(storage, auth.user.id, file_id)
-    except FileError as exc:
-        _raise_http(exc)
-    return _response(record)
-
-
-@router.patch("/{file_id}", response_model=FileResponse)
-async def rename_file_route(
-    file_id: str,
-    payload: FileRenameRequest,
-    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
-    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
-) -> FileResponse:
-    """Rename one active file without changing its bytes."""
-
-    try:
-        record = await rename_file(storage, auth.user.id, file_id, payload)
     except FileError as exc:
         _raise_http(exc)
     return _response(record)
@@ -217,6 +265,21 @@ async def restore_file_route(
 
     try:
         record = await restore_file(storage, auth.user.id, file_id)
+    except FileError as exc:
+        _raise_http(exc)
+    return _response(record)
+
+
+@router.post("/{file_id}/processing/retry", response_model=FileResponse)
+async def retry_file_processing_route(
+    file_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> FileResponse:
+    """Retry processing for one active source."""
+
+    try:
+        record = await retry_file_context(storage, auth.user.id, file_id)
     except FileError as exc:
         _raise_http(exc)
     return _response(record)

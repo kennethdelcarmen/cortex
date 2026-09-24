@@ -7,16 +7,19 @@ from fastmcp.exceptions import ToolError
 
 from .api.mcp import database_storage, get_mcp_auth
 from .files.errors import FileError
-from .files.schemas import FileListResponse, FileRenameRequest, FileResponse
+from .files.schemas import FileContextResponse, FileListResponse, FileResponse
 from .files.service import (
+    DEFAULT_CONTEXT_CHARACTERS,
+    MAX_CONTEXT_CHARACTERS,
     FileListFilters,
     FileRecord,
     delete_file,
     get_file,
+    get_file_context,
     list_files,
-    rename_file,
     restore_file,
 )
+from .files.storage import FileBlobStore
 from .logs.errors import ActivityLogError
 from .logs.schemas import (
     ActivityLogCreateRequest,
@@ -154,9 +157,9 @@ def _file_response(record: FileRecord) -> FileResponse:
     return FileResponse(
         id=record.id,
         name=record.name,
-        media_type=record.media_type,
         size_bytes=record.size_bytes,
         sha256=record.sha256,
+        context_status=record.context_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -187,6 +190,7 @@ def _raise_note_tool(error: NoteError | TagError) -> None:
 def create_mcp_server(
     name: str = "Cortex",
     storage: Storage | None = None,
+    file_storage: FileBlobStore | None = None,
 ) -> FastMCP:
     """Create the MCP registry backed by shared domain service functions."""
 
@@ -253,25 +257,39 @@ def create_mcp_server(
             _raise_file_tool(exc)
         return _file_response(record)
 
-    @server.tool(name="rename_file")
-    async def rename_file_tool(
+    @server.tool(name="get_file_context")
+    async def get_file_context_tool(
         file_id: str,
-        payload: FileRenameRequest,
-        ctx: Context,
-    ) -> FileResponse:
-        """Rename one owner-scoped file without changing its bytes."""
+        max_characters: int = DEFAULT_CONTEXT_CHARACTERS,
+        ctx: Context | None = None,
+    ) -> FileContextResponse:
+        """Return bounded extracted context for one active source file."""
 
         del ctx
+        if not 1 <= max_characters <= MAX_CONTEXT_CHARACTERS:
+            raise ToolError("invalid_file_query: The file list query is invalid.")
         try:
-            record = await rename_file(
+            if file_storage is None:
+                raise ToolError("file_storage_unavailable: File storage is not available.")
+            record = await get_file_context(
                 database_storage(storage),
+                file_storage,
                 get_mcp_auth().user.id,
                 file_id,
-                payload,
+                max_characters,
             )
         except FileError as exc:
             _raise_file_tool(exc)
-        return _file_response(record)
+        return FileContextResponse(
+            file_id=record.file_id,
+            name=record.name,
+            status=record.status,
+            text=record.text,
+            truncated=record.truncated,
+            preview_kind=record.preview_kind,
+            error=record.error,
+            processed_at=record.processed_at,
+        )
 
     @server.tool(name="delete_file")
     async def delete_file_tool(file_id: str, ctx: Context) -> str:

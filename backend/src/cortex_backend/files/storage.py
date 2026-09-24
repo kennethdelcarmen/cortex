@@ -16,7 +16,8 @@ from typing import Protocol, runtime_checkable
 from .errors import FileContentMissingError, FileStorageUnavailableError, FileTooLargeError
 
 CHUNK_SIZE = 1024 * 1024
-_STORAGE_KEY = re.compile(r"^[0-9a-f]{32}\.blob$")
+_RAW_STORAGE_KEY = re.compile(r"^[0-9a-f]{32}\.blob$")
+_ARTIFACT_STORAGE_KEY = re.compile(r"^artifacts/[0-9a-f]{64}/[a-z0-9_-]+\.artifact$")
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,9 @@ class LocalFileBlobStore:
         return self._root
 
     def _path(self, storage_key: str) -> Path:
-        if not _STORAGE_KEY.fullmatch(storage_key):
+        if not (
+            _RAW_STORAGE_KEY.fullmatch(storage_key) or _ARTIFACT_STORAGE_KEY.fullmatch(storage_key)
+        ):
             raise FileStorageUnavailableError()
         return self._root / storage_key
 
@@ -98,7 +101,7 @@ class LocalFileBlobStore:
         """Stream to a temporary object before atomically publishing the final key."""
 
         final_path = self._path(storage_key)
-        self._root.mkdir(parents=True, exist_ok=True)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path: Path | None = None
         size_bytes = 0
         digest = hashlib.sha256()

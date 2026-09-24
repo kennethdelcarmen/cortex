@@ -64,3 +64,11 @@ class FileContentMissingError(FileError):
     status_code = 404
     code = "file_content_missing"
     message = "The file contents are unavailable."
+
+
+class FileContextNotReadyError(FileError):
+    """The requested derived preview is not available yet."""
+
+    status_code = 409
+    code = "file_context_not_ready"
+    message = "File context is not ready yet."

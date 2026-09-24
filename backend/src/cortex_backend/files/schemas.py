@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-
-class FileRenameRequest(BaseModel):
-    """Validated metadata-only file rename."""
-
-    name: str = Field(min_length=1, max_length=255)
-
-    @field_validator("name")
-    @classmethod
-    def name_must_have_content(cls, value: str) -> str:
-        return value.strip()
+FileContextStatus = Literal["pending", "processing", "ready", "unsupported", "failed"]
+FilePreviewKind = Literal["text", "pdf", "image"]
 
 
 class FileResponse(BaseModel):
@@ -23,9 +16,9 @@ class FileResponse(BaseModel):
 
     id: str
     name: str
-    media_type: str
     size_bytes: int = Field(ge=0)
     sha256: str
+    context_status: FileContextStatus
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -36,3 +29,16 @@ class FileListResponse(BaseModel):
 
     items: list[FileResponse]
     next_cursor: str | None
+
+
+class FileContextResponse(BaseModel):
+    """Bounded derived context and preview state for one source file."""
+
+    file_id: str
+    name: str
+    status: FileContextStatus
+    text: str | None
+    truncated: bool
+    preview_kind: FilePreviewKind | None
+    error: str | None
+    processed_at: datetime | None

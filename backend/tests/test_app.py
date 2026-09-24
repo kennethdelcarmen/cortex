@@ -1,5 +1,6 @@
 """HTTP behavior tests for the application foundation."""
 
+import asyncio
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
@@ -7,6 +8,8 @@ from sqlalchemy import text
 
 from cortex_backend.app import create_app
 from cortex_backend.config import Settings
+from cortex_backend.files.processing import FileProcessingHealth
+from cortex_backend.files.storage import LocalFileBlobStore
 from cortex_backend.mcp import create_mcp_server
 from cortex_backend.storage import InMemoryStorage, SQLiteStorage
 
@@ -69,6 +72,30 @@ async def test_readyz_returns_stable_error_when_storage_is_unavailable() -> None
     }
 
 
+async def test_readyz_reports_degraded_processing_capabilities_without_blocking_service(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        settings=Settings(file_processing_enabled=False),
+        storage=InMemoryStorage(),
+        file_storage=LocalFileBlobStore(tmp_path / "files"),
+    )
+    health = FileProcessingHealth(enabled=True)
+    health.mark_started()
+    health.mark_success(("ocr_unavailable",))
+    app.state.file_processing_health = health
+
+    class RunningTask:
+        def done(self) -> bool:
+            return False
+
+    app.state.file_processing_task = RunningTask()
+    status_code, body = await request(app, "/readyz")
+
+    assert status_code == 200
+    assert body == {"status": "degraded", "warnings": ["ocr_unavailable"]}
+
+
 async def test_sqlite_storage_readiness_creates_database_file(tmp_path) -> None:
     database_path = tmp_path / "nested" / "cortex.db"
     storage = SQLiteStorage(database_path)
@@ -103,6 +130,27 @@ async def test_readyz_returns_stable_error_for_invalid_sqlite_path(tmp_path) -> 
         "detail": {
             "code": "storage_unavailable",
             "message": "Storage is not ready.",
+        }
+    }
+
+
+async def test_readyz_reports_worker_failure_when_processing_schema_is_missing(tmp_path) -> None:
+    app = create_app(
+        settings=Settings(
+            database_path=tmp_path / "unmigrated.db",
+            file_storage_path=tmp_path / "files",
+            file_processing_poll_seconds=0.01,
+        )
+    )
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.05)
+        status_code, body = await request(app, "/readyz")
+
+    assert status_code == 503
+    assert body == {
+        "detail": {
+            "code": "file_processing_unavailable",
+            "message": "File processing worker is not ready.",
         }
     }
 

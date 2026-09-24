@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 
 class HealthResponse(BaseModel):
     status: str
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ApiMetadataResponse(BaseModel):

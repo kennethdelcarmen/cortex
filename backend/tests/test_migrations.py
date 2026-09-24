@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -165,12 +166,41 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "user_id",
             "original_name",
             "storage_key",
-            "media_type",
             "size_bytes",
             "sha256",
             "created_at",
             "updated_at",
             "deleted_at",
+        }
+        context_job_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(file_context_jobs)")
+        }
+        assert context_job_columns == {
+            "id",
+            "user_id",
+            "source_sha256",
+            "status",
+            "attempts",
+            "available_at",
+            "lease_expires_at",
+            "last_error",
+            "extractor_version",
+            "created_at",
+            "updated_at",
+        }
+        artifact_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(file_artifacts)")
+        }
+        assert artifact_columns == {
+            "id",
+            "user_id",
+            "source_sha256",
+            "artifact_kind",
+            "storage_key",
+            "size_bytes",
+            "sha256",
+            "extractor_version",
+            "created_at",
         }
 
         indexes = {
@@ -204,6 +234,8 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_notes_owner_deleted_journal",
             "ix_note_tags_tag_id",
             "ix_files_owner_deleted_created",
+            "ix_file_context_jobs_claim",
+            "ix_file_artifacts_owner_hash",
         } <= indexes
 
         file_indexes = list(connection.execute("PRAGMA index_list(files)"))
@@ -217,8 +249,87 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0010_files_foundation",
+            "0012_normalize_file_context_timestamps",
         )
+
+
+def test_file_context_migration_backfills_one_pending_job_per_source_hash(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0010_files_foundation")
+
+    user_id = "00000000-0000-0000-0000-000000000001"
+    source_hash = "a" * 64
+    other_hash = "b" * 64
+    with sqlite3.connect(database_path) as connection:
+        timestamp = "2027-01-01T00:00:00+00:00"
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                "owner@example.com",
+                "not-used",
+                1,
+                1,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        for file_id, digest in (
+            ("00000000-0000-0000-0000-000000000010", source_hash),
+            ("00000000-0000-0000-0000-000000000011", source_hash),
+            ("00000000-0000-0000-0000-000000000012", other_hash),
+        ):
+            connection.execute(
+                "INSERT INTO files "
+                "(id, user_id, original_name, storage_key, media_type, size_bytes, sha256, "
+                "created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    file_id,
+                    user_id,
+                    "source.txt",
+                    f"{file_id.replace('-', '')}.blob",
+                    "text/plain",
+                    4,
+                    digest,
+                    timestamp,
+                    timestamp,
+                    None,
+                ),
+            )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        jobs = connection.execute(
+            "SELECT user_id, source_sha256, status, attempts, extractor_version "
+            "FROM file_context_jobs ORDER BY source_sha256"
+        ).fetchall()
+        assert jobs == [
+            (user_id, source_hash, "pending", 0, "v1"),
+            (user_id, other_hash, "pending", 0, "v1"),
+        ]
+        timestamps = connection.execute(
+            "SELECT available_at, created_at, updated_at, lease_expires_at FROM file_context_jobs"
+        ).fetchall()
+        assert all("T" not in value and "+" not in value for row in timestamps for value in row[:3])
+        assert all(
+            row[3] is None or ("T" not in row[3] and "+" not in row[3]) for row in timestamps
+        )
+        claim_time = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+        assert connection.execute(
+            "SELECT COUNT(*) FROM file_context_jobs WHERE status = 'pending' AND available_at <= ?",
+            (claim_time,),
+        ).fetchone() == (2,)
+        assert "media_type" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(files)")
+        }
 
 
 def test_mcp_key_migration_upgrades_existing_database(tmp_path, monkeypatch) -> None:
