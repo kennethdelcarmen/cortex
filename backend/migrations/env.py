@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from cortex_backend.auth.models import Base
 from cortex_backend.config import Settings
+from cortex_backend.files import models as _file_models  # noqa: F401
 from cortex_backend.logs import models as _activity_log_models  # noqa: F401
 from cortex_backend.memory import models as _memory_models  # noqa: F401
 from cortex_backend.tasks import models as _task_models  # noqa: F401

@@ -9,6 +9,7 @@ from ..auth.security import validate_csrf, validate_request_origin
 from ..auth.service import CurrentAuth, authenticate_session
 from ..auth.throttling import LoginThrottle
 from ..config import Settings
+from ..files.storage import FileBlobStore
 from ..storage import DatabaseStorage, Storage
 
 
@@ -22,6 +23,12 @@ def get_storage(request: Request) -> Storage:
     """Return storage from the application composition root."""
 
     return request.app.state.storage
+
+
+def get_file_storage(request: Request) -> FileBlobStore:
+    """Return the application-owned file byte store."""
+
+    return request.app.state.file_storage
 
 
 def get_database_storage(request: Request) -> DatabaseStorage:

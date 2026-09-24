@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     service_version: str = "0.1.0"
     database_path: Path = Path("data/cortex.db")
+    file_storage_path: Path = Path("data/files")
+    file_max_size_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     setup_secret: SecretStr | None = None
     cors_origins: list[str] = Field(default_factory=list)
 

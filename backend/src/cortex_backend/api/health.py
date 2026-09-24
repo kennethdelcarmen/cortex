@@ -5,8 +5,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from ..files.storage import FileBlobStore
 from ..storage import Storage
-from .dependencies import get_storage
+from .dependencies import get_file_storage, get_storage
 from .schemas import HealthResponse
 
 logger = logging.getLogger(__name__)
@@ -27,11 +28,13 @@ async def healthz() -> HealthResponse:
 )
 async def readyz(
     storage: Annotated[Storage, Depends(get_storage)],
+    file_storage: Annotated[FileBlobStore, Depends(get_file_storage)],
 ) -> HealthResponse:
-    """Return readiness after checking the configured storage boundary."""
+    """Return readiness after checking database and file storage boundaries."""
 
     try:
         await storage.check_ready()
+        await file_storage.check_ready()
     except Exception as exc:
         logger.exception("Storage readiness check failed")
         raise HTTPException(

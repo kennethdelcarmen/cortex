@@ -6,6 +6,17 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
 from .api.mcp import database_storage, get_mcp_auth
+from .files.errors import FileError
+from .files.schemas import FileListResponse, FileRenameRequest, FileResponse
+from .files.service import (
+    FileListFilters,
+    FileRecord,
+    delete_file,
+    get_file,
+    list_files,
+    rename_file,
+    restore_file,
+)
 from .logs.errors import ActivityLogError
 from .logs.schemas import (
     ActivityLogCreateRequest,
@@ -139,6 +150,23 @@ def _raise_activity_log_tool(error: ActivityLogError) -> None:
     raise ToolError(f"{error.code}: {error.message}") from error
 
 
+def _file_response(record: FileRecord) -> FileResponse:
+    return FileResponse(
+        id=record.id,
+        name=record.name,
+        media_type=record.media_type,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        deleted_at=record.deleted_at,
+    )
+
+
+def _raise_file_tool(error: FileError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
 def _note_response(record: NoteRecord) -> NoteResponse:
     return NoteResponse(
         id=record.id,
@@ -156,8 +184,11 @@ def _raise_note_tool(error: NoteError | TagError) -> None:
     _raise_tool(error)
 
 
-def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> FastMCP:
-    """Create the MCP registry backed by shared task service functions."""
+def create_mcp_server(
+    name: str = "Cortex",
+    storage: Storage | None = None,
+) -> FastMCP:
+    """Create the MCP registry backed by shared domain service functions."""
 
     server = FastMCP(name)
 
@@ -183,6 +214,86 @@ def create_mcp_server(name: str = "Cortex", storage: Storage | None = None) -> F
                 for record in records
             ]
         )
+
+    @server.tool(name="list_files")
+    async def list_files_tool(
+        include_deleted: bool = False,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> FileListResponse:
+        """List owner-scoped file metadata without returning binary contents."""
+
+        del ctx
+        try:
+            page = await list_files(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                FileListFilters(
+                    include_deleted=include_deleted,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except FileError as exc:
+            _raise_file_tool(exc)
+        return FileListResponse(
+            items=[_file_response(record) for record in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_file")
+    async def get_file_tool(file_id: str, ctx: Context) -> FileResponse:
+        """Return one active owner-scoped file's metadata."""
+
+        del ctx
+        try:
+            record = await get_file(database_storage(storage), get_mcp_auth().user.id, file_id)
+        except FileError as exc:
+            _raise_file_tool(exc)
+        return _file_response(record)
+
+    @server.tool(name="rename_file")
+    async def rename_file_tool(
+        file_id: str,
+        payload: FileRenameRequest,
+        ctx: Context,
+    ) -> FileResponse:
+        """Rename one owner-scoped file without changing its bytes."""
+
+        del ctx
+        try:
+            record = await rename_file(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                file_id,
+                payload,
+            )
+        except FileError as exc:
+            _raise_file_tool(exc)
+        return _file_response(record)
+
+    @server.tool(name="delete_file")
+    async def delete_file_tool(file_id: str, ctx: Context) -> str:
+        """Soft-delete one active owner-scoped file."""
+
+        del ctx
+        try:
+            await delete_file(database_storage(storage), get_mcp_auth().user.id, file_id)
+        except FileError as exc:
+            _raise_file_tool(exc)
+        return "File deleted."
+
+    @server.tool(name="restore_file")
+    async def restore_file_tool(file_id: str, ctx: Context) -> FileResponse:
+        """Restore one owner-scoped file."""
+
+        del ctx
+        try:
+            record = await restore_file(database_storage(storage), get_mcp_auth().user.id, file_id)
+        except FileError as exc:
+            _raise_file_tool(exc)
+        return _file_response(record)
 
     @server.tool(name="create_task")
     async def create_task_tool(payload: TaskCreateRequest, ctx: Context) -> TaskResponse:

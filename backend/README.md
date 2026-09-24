@@ -32,6 +32,13 @@ The local runtime uses SQLite at `data/cortex.db` by default. Set
 created when migrations run or `/readyz` first checks storage, and the default
 `data/` directory is ignored by Git.
 
+Uploaded file bytes are stored below `data/files` by default. Set
+`CORTEX_FILE_STORAGE_PATH` to move that directory, and set
+`CORTEX_FILE_MAX_SIZE_BYTES` to change the per-file upload limit (25 MiB by
+default). The file directory and SQLite database must be backed up and restored
+together. File metadata is migrated by `0010_files_foundation`; its downgrade
+removes metadata only and does not delete stored bytes.
+
 Apply schema migrations explicitly before starting the service:
 
 ```bash
@@ -109,10 +116,14 @@ The initial service exposes:
   `amber`, `slate`, `plum`, `violet`, `sand`, or `destructive`, and can be
   archived and restored without removing historical note or task memberships.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
+- `/api/v1/files` for authenticated multipart uploads, metadata listing,
+  attachment downloads, renames, soft deletion, and restoration. Files are
+  stored as opaque local objects; content extraction, previews, and indexing are
+  deferred.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task, note, and activity-log operations to agents. MCP clients may send
-  either an existing session token or the configured static MCP key as a
-  bearer token in the `Authorization` header. Static keys are accepted only
+  task, note, activity-log, and file-metadata operations to agents. MCP clients
+  may send either an existing session token or the configured static MCP key as
+  a bearer token in the `Authorization` header. Static keys are accepted only
   on `/mcp`; REST endpoints continue to require the browser session and CSRF
   protections. The MCP catalog surface is read-only through `list_tags`; agents
   may apply existing active tags but cannot mutate the catalog.

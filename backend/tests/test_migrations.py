@@ -159,6 +159,19 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "metadata",
             "created_at",
         }
+        file_columns = {row[1] for row in connection.execute("PRAGMA table_info(files)")}
+        assert file_columns == {
+            "id",
+            "user_id",
+            "original_name",
+            "storage_key",
+            "media_type",
+            "size_bytes",
+            "sha256",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+        }
 
         indexes = {
             row[1]
@@ -190,7 +203,11 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_notes_owner_deleted_updated",
             "ix_notes_owner_deleted_journal",
             "ix_note_tags_tag_id",
+            "ix_files_owner_deleted_created",
         } <= indexes
+
+        file_indexes = list(connection.execute("PRAGMA index_list(files)"))
+        assert any(row[2] == 1 for row in file_indexes)
 
 
 def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
@@ -200,7 +217,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0009_fixed_tags",
+            "0010_files_foundation",
         )
 
 

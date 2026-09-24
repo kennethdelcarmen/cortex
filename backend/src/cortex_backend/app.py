@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.auth import router as auth_router
+from .api.files import router as files_router
 from .api.health import router as health_router
 from .api.logs import router as activity_logs_router
 from .api.mcp import MCPAuthMiddleware
@@ -17,6 +18,7 @@ from .api.tasks import series_router as task_series_router
 from .api.v1 import router as v1_router
 from .auth.throttling import LoginThrottle
 from .config import Settings, get_settings
+from .files.storage import FileBlobStore, LocalFileBlobStore
 from .mcp import create_mcp_server
 from .storage import ClosableStorage, SQLiteStorage, Storage
 
@@ -37,6 +39,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 def create_app(
     settings: Settings | None = None,
     storage: Storage | None = None,
+    file_storage: FileBlobStore | None = None,
 ) -> FastAPI:
     """Build an application with explicit settings and storage dependencies."""
 
@@ -44,7 +47,15 @@ def create_app(
     resolved_storage = (
         storage if storage is not None else SQLiteStorage(resolved_settings.database_path)
     )
-    mcp_server = create_mcp_server(resolved_settings.app_name, resolved_storage)
+    resolved_file_storage = (
+        file_storage
+        if file_storage is not None
+        else LocalFileBlobStore(resolved_settings.file_storage_path)
+    )
+    mcp_server = create_mcp_server(
+        resolved_settings.app_name,
+        resolved_storage,
+    )
     mcp_app = mcp_server.http_app(
         json_response=True,
         path="/",
@@ -59,6 +70,7 @@ def create_app(
     )
     application.state.settings = resolved_settings
     application.state.storage = resolved_storage
+    application.state.file_storage = resolved_file_storage
     application.state.mcp_server = mcp_server
     application.state.mcp_app = mcp_app
     application.state.login_throttle = LoginThrottle()
@@ -75,6 +87,7 @@ def create_app(
     application.include_router(v1_router)
     application.include_router(auth_router)
     application.include_router(activity_logs_router)
+    application.include_router(files_router)
     application.include_router(notes_router)
     application.include_router(tags_router)
     application.include_router(tasks_router)
