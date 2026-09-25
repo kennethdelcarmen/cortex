@@ -39,6 +39,14 @@ from .memory.service import (
     restore_note,
     update_note,
 )
+from .recovery.errors import RecoveryError
+from .recovery.schemas import (
+    RecoveryBatchRequest,
+    RecoveryItemResponse,
+    RecoveryListResponse,
+    RecoveryMutationResponse,
+)
+from .recovery.service import RecoveryListFilters, list_recovery_items, mutate_recovery_items
 from .storage import Storage
 from .tags.errors import TagError
 from .tags.schemas import TagListResponse, TagResponse
@@ -187,6 +195,10 @@ def _raise_note_tool(error: NoteError | TagError) -> None:
     _raise_tool(error)
 
 
+def _raise_recovery_tool(error: RecoveryError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
 def create_mcp_server(
     name: str = "Cortex",
     storage: Storage | None = None,
@@ -195,6 +207,71 @@ def create_mcp_server(
     """Create the MCP registry backed by shared domain service functions."""
 
     server = FastMCP(name)
+
+    @server.tool(name="list_recovery_items")
+    async def list_recovery_items_tool(
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> RecoveryListResponse:
+        """List deleted and archived records across the owner-scoped domains."""
+
+        del ctx
+        try:
+            page = await list_recovery_items(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                RecoveryListFilters(limit=limit, cursor=cursor),
+            )
+        except RecoveryError as exc:
+            _raise_recovery_tool(exc)
+        return RecoveryListResponse(
+            items=[
+                RecoveryItemResponse(
+                    type=item.type,
+                    id=item.id,
+                    label=item.label,
+                    removed_at=item.removed_at,
+                    created_at=item.created_at,
+                )
+                for item in page.items
+            ],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="restore_recovery_items")
+    async def restore_recovery_items_tool(
+        payload: RecoveryBatchRequest,
+        ctx: Context | None = None,
+    ) -> RecoveryMutationResponse:
+        """Restore one or more deleted or archived records."""
+
+        del ctx
+        results = await mutate_recovery_items(
+            database_storage(storage),
+            file_storage,
+            get_mcp_auth().user.id,
+            payload.items,
+            permanent=False,
+        )
+        return RecoveryMutationResponse(results=results)
+
+    @server.tool(name="permanently_delete_recovery_items")
+    async def permanently_delete_recovery_items_tool(
+        payload: RecoveryBatchRequest,
+        ctx: Context | None = None,
+    ) -> RecoveryMutationResponse:
+        """Permanently delete one or more deleted or archived records."""
+
+        del ctx
+        results = await mutate_recovery_items(
+            database_storage(storage),
+            file_storage,
+            get_mcp_auth().user.id,
+            payload.items,
+            permanent=True,
+        )
+        return RecoveryMutationResponse(results=results)
 
     @server.tool(name="list_tags")
     async def list_tags_tool(ctx: Context | None = None) -> TagListResponse:

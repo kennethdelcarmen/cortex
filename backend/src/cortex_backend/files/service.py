@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..storage import DatabaseStorage
@@ -20,6 +20,7 @@ from .errors import (
     FileContentMissingError,
     FileContextNotReadyError,
     FileError,
+    FileMustBeDeletedError,
     FileNotFoundError,
     FilePreviewUnavailableError,
     FileStorageUnavailableError,
@@ -404,6 +405,65 @@ async def restore_file(
                 file.updated_at = _utc_now()
                 await db.flush()
             return _record(file, await _context_status(db, user_id, file.sha256))
+
+
+async def permanently_delete_file(
+    storage: DatabaseStorage,
+    blob_store: FileBlobStore,
+    user_id: str,
+    file_id: str,
+) -> None:
+    """Permanently delete one deleted file and unreferenced derived objects."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            file = await _get_file_row(db, user_id, file_id, include_deleted=True)
+            if file.deleted_at is None:
+                raise FileMustBeDeletedError()
+
+            other_reference = await db.scalar(
+                select(File.id)
+                .where(
+                    File.user_id == user_id,
+                    File.sha256 == file.sha256,
+                    File.id != file.id,
+                )
+                .limit(1)
+            )
+            artifact_rows = []
+            if other_reference is None:
+                artifact_rows = list(
+                    (
+                        await db.scalars(
+                            select(FileArtifact).where(
+                                FileArtifact.user_id == user_id,
+                                FileArtifact.source_sha256 == file.sha256,
+                            )
+                        )
+                    ).all()
+                )
+
+            storage_keys = [file.storage_key]
+            if other_reference is None:
+                storage_keys.extend(artifact.storage_key for artifact in artifact_rows)
+            for storage_key in storage_keys:
+                await blob_store.delete(storage_key)
+
+            if other_reference is None:
+                await db.execute(
+                    delete(FileArtifact).where(
+                        FileArtifact.user_id == user_id,
+                        FileArtifact.source_sha256 == file.sha256,
+                    )
+                )
+                await db.execute(
+                    delete(FileContextJob).where(
+                        FileContextJob.user_id == user_id,
+                        FileContextJob.source_sha256 == file.sha256,
+                    )
+                )
+            await db.delete(file)
+            await db.flush()
 
 
 async def stream_file(

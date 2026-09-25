@@ -18,6 +18,12 @@ class TaskNotFoundError(TaskError):
     message = "The task was not found."
 
 
+class TaskMustBeDeletedError(TaskError):
+    status_code = 409
+    code = "task_must_be_deleted"
+    message = "Only deleted tasks can be permanently deleted."
+
+
 class InvalidCursorError(TaskError):
     status_code = 400
     code = "invalid_task_cursor"

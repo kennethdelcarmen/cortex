@@ -31,6 +31,7 @@ from .errors import (
     InvalidTaskSummaryTimezoneError,
     InvalidTaskTagError,
     RecurrenceAnchorRequiredError,
+    TaskMustBeDeletedError,
     TaskNotFoundError,
     TaskOccurrenceRequiredError,
     TaskSeriesNotFoundError,
@@ -434,16 +435,17 @@ async def _materialize_series(
     await db.flush()
 
 
-async def _get_task_row(db: AsyncSession, user_id: str, task_id: str) -> Task:
-    task = await db.scalar(
-        select(Task)
-        .where(
-            Task.id == task_id,
-            Task.user_id == user_id,
-            Task.deleted_at.is_(None),
-        )
-        .limit(1)
-    )
+async def _get_task_row(
+    db: AsyncSession,
+    user_id: str,
+    task_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Task:
+    statement = select(Task).where(Task.id == task_id, Task.user_id == user_id).limit(1)
+    if not include_deleted:
+        statement = statement.where(Task.deleted_at.is_(None))
+    task = await db.scalar(statement)
     if task is None:
         raise TaskNotFoundError()
     return task
@@ -1098,6 +1100,43 @@ async def delete_task(storage: DatabaseStorage, user_id: str, task_id: str) -> N
                 )
                 .values(position=Task.position - 1)
             )
+
+
+async def restore_task(
+    storage: DatabaseStorage,
+    user_id: str,
+    task_id: str,
+) -> TaskRecord:
+    """Restore one deleted task at the end of its current status column."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id, include_deleted=True)
+            if task.deleted_at is not None:
+                position = await _next_position(db, user_id, task.status)
+                task.deleted_at = None
+                task.position = position
+                task.updated_at = _utc_now()
+                await db.flush()
+            tags = await _tags_for_tasks(db, [task.id])
+            return _record(task, tags.get(task.id, []))
+
+
+async def permanently_delete_task(
+    storage: DatabaseStorage,
+    user_id: str,
+    task_id: str,
+) -> None:
+    """Permanently delete one deleted task occurrence."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            task = await _get_task_row(db, user_id, task_id, include_deleted=True)
+            if task.deleted_at is None:
+                raise TaskMustBeDeletedError()
+            await db.execute(delete(TaskTag).where(TaskTag.task_id == task.id))
+            await db.delete(task)
+            await db.flush()
 
 
 async def get_task_series(

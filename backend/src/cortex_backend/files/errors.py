@@ -20,6 +20,12 @@ class FileNotFoundError(FileError):
     message = "The file was not found."
 
 
+class FileMustBeDeletedError(FileError):
+    status_code = 409
+    code = "file_must_be_deleted"
+    message = "Only deleted files can be permanently deleted."
+
+
 class InvalidFileCursorError(FileError):
     """The file listing cursor cannot be used for the requested filters."""
 

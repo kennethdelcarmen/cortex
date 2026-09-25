@@ -201,9 +201,14 @@ The initial service exposes:
   processing retries. Raw `/content` downloads always use attachment
   semantics. The backend owns Office conversion, PDF text extraction, and
   image OCR; browser-side file parsers are not part of the storage contract.
+- `/api/v1/recovery` for the unified authenticated recovery feed across deleted
+  tasks, notes, files, and archived tags. `POST /restore` and
+  `POST /permanent-delete` accept one or more typed `{type, id}` references and
+  return independent per-item outcomes. Permanent deletion is explicit and
+  removes file blobs and unreferenced derived artifacts when applicable.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task, note, activity-log, and immutable file-metadata/context operations to
-  agents. MCP clients
+  task, note, activity-log, recovery, and immutable file-metadata/context
+  operations to agents. MCP clients
   may send either an existing session token or the configured static MCP key as
   a bearer token in the `Authorization` header. Static keys are accepted only
   on `/mcp`; REST endpoints continue to require the browser session and CSRF

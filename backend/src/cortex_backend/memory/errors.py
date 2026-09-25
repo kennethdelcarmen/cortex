@@ -18,6 +18,12 @@ class NoteNotFoundError(NoteError):
     message = "The note was not found."
 
 
+class NoteMustBeDeletedError(NoteError):
+    status_code = 409
+    code = "note_must_be_deleted"
+    message = "Only deleted notes can be permanently deleted."
+
+
 class InvalidNoteCursorError(NoteError):
     status_code = 400
     code = "invalid_note_cursor"

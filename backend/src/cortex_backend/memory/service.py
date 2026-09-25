@@ -24,6 +24,7 @@ from .errors import (
     InvalidNoteCursorError,
     InvalidNoteQueryError,
     InvalidNoteTagError,
+    NoteMustBeDeletedError,
     NoteNotFoundError,
 )
 from .models import Note, NoteTag
@@ -353,6 +354,27 @@ async def restore_note(
                 await db.flush()
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
             return _record(note, tags)
+
+
+async def permanently_delete_note(
+    storage: DatabaseStorage,
+    user_id: str,
+    note_id: str,
+) -> None:
+    """Permanently delete one deleted note and its local search entry."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            note = await _get_note_row(db, user_id, note_id, include_deleted=True)
+            if note.deleted_at is None:
+                raise NoteMustBeDeletedError()
+            await db.execute(
+                text("DELETE FROM notes_fts WHERE note_id = :note_id"),
+                {"note_id": note.id},
+            )
+            await db.execute(delete(NoteTag).where(NoteTag.note_id == note.id))
+            await db.delete(note)
+            await db.flush()
 
 
 async def list_notes(
