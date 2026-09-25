@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { FileAttachmentPicker } from "@/components/file-attachment-picker";
 import { TagPicker } from "@/components/tag-picker";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskSeries, TaskSeriesUpdateInput, TaskStatus } from "../api";
 import type { Tag, TagColor } from "@/features/tags/api";
+import type { StoredFile } from "@/features/memory/files-api";
 import {
   recurrenceFormError,
   recurrenceValuesFromPayload,
@@ -45,6 +47,7 @@ type SeriesFormValues = {
   status: TaskStatus;
   priority: TaskPriority;
   tags: string[];
+  attachments: StoredFile[];
   recurrence: RecurrenceFormValues;
 };
 
@@ -55,6 +58,7 @@ function formValuesFromSeries(series: TaskSeries | null): SeriesFormValues {
     status: series?.status ?? "backlog",
     priority: series?.priority ?? "none",
     tags: series?.tags ?? [],
+    attachments: series?.attachments ?? [],
     recurrence: series
       ? recurrenceValuesFromPayload(series.recurrence)
       : recurrenceValuesFromPayload({
@@ -114,6 +118,7 @@ export function TaskSeriesDialog({
       status: values.status,
       priority: values.priority,
       tags: values.tags,
+      file_ids: values.attachments.map((file) => file.id),
       recurrence,
     });
   }
@@ -197,6 +202,13 @@ export function TaskSeriesDialog({
                 />
               </div>
             </div>
+
+            <FileAttachmentPicker
+              id="task-series-attachments"
+              value={values.attachments}
+              onChange={(attachments) => update("attachments", attachments)}
+              disabled={isSaving}
+            />
 
             <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby="task-series-repeat-heading">
               <div>

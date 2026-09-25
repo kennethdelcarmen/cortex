@@ -75,6 +75,10 @@ bytes. File migrations `0011_file_context_pipeline` and
 operations; the first migration's downgrade is backup-only because the removed
 upload MIME metadata cannot be reconstructed. Migration `0013_file_tags_search`
 adds owner-scoped file tags and the local metadata/content search index.
+Migration `0014_record_file_attachments` adds ordered note, task, and recurring
+task-series file links. Active note/task/series responses expose only active
+files; soft-deleted links remain durable for restore and permanent file deletion
+cleans them up.
 
 File processing runs in a restart-safe local worker. Configure
 `CORTEX_FILE_PROCESSING_ENABLED`, `CORTEX_FILE_PROCESSING_POLL_SECONDS`,
@@ -189,13 +193,15 @@ The initial service exposes:
 - `/api/v1/activity-logs` for authenticated activity-log append and history
   queries with filtering and cursor pagination.
 - `/api/v1/notes` for authenticated sanitized-HTML note and journal-entry CRUD,
-  normalized tags, local full-text search, cursor pagination, soft deletion,
-  and restoration.
+  normalized tags, ordered reusable file attachments, local full-text search,
+  cursor pagination, soft deletion, and restoration.
 - `/api/v1/tags` for the authenticated shared tag catalog. Tags are normalized
   and owner-scoped, use one of the named palette colors `rose`, `sea-glass`,
   `amber`, `slate`, `plum`, `violet`, `sand`, or `destructive`, and can be
   archived and restored without removing historical note or task memberships.
-- `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
+- `/api/v1/tasks` and `/api/v1/task-series` for authenticated task and recurring
+  task CRUD, ordered file attachments, future-occurrence inheritance, filtering,
+  and cursor pagination.
 - `/api/v1/files` for authenticated multipart uploads, owner-scoped shared-tag
   assignment, metadata/content search, repeated tag and context-status
   filters, immutable source metadata listing, attachment downloads, bounded

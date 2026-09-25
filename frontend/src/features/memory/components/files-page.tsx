@@ -38,7 +38,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { useCurrentUser } from "@/features/auth/hooks";
+import { taskQueryKey, taskSeriesQueryKey } from "@/features/tasks/api";
 import { createTag, getTags, tagsQueryKey, type Tag, type TagColor } from "@/features/tags/api";
+import { notesQueryKey } from "../api";
 import {
   deleteFile,
   downloadFile,
@@ -507,10 +509,17 @@ function FilesWorkspace() {
   );
 
   const { mutateAsync: uploadFileAsync } = useMutation({ mutationFn: uploadFile });
+  function invalidateAttachmentConsumers() {
+    void queryClient.invalidateQueries({ queryKey: notesQueryKey });
+    void queryClient.invalidateQueries({ queryKey: taskQueryKey });
+    void queryClient.invalidateQueries({ queryKey: taskSeriesQueryKey });
+  }
+
   const deleteMutation = useMutation({
     mutationFn: deleteFile,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: filesQueryKey });
+      invalidateAttachmentConsumers();
       setDeleteTarget(null);
       setDrawerFile(null);
       feedback.success({ title: "File removed from active memory.", description: "Cortex keeps the source for recovery later." });
@@ -527,6 +536,7 @@ function FilesWorkspace() {
     mutationFn: ({ fileId, tags }: { fileId: string; tags: string[] }) => updateFileTags(fileId, tags),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: filesQueryKey });
+      invalidateAttachmentConsumers();
     },
   });
   const createTagMutation = useMutation({

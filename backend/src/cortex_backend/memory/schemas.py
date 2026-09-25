@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from ..files.schemas import FileResponse
 from ..tags.schemas import TagColor
 from .content import normalize_note_body
 
@@ -35,6 +36,7 @@ class NoteCreateRequest(BaseModel):
     )
     journal_date: date | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
+    file_ids: list[str] = Field(default_factory=list, max_length=20)
 
     _validate_title = field_validator("title")(_validate_optional_title)
     _validate_note_body = field_validator("body")(_validate_body)
@@ -50,6 +52,7 @@ class NoteUpdateRequest(BaseModel):
     )
     journal_date: date | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
+    file_ids: list[str] | None = Field(default=None, max_length=20)
 
     _validate_title = field_validator("title")(_validate_optional_title)
     _validate_note_body = field_validator("body")(_validate_body)
@@ -63,6 +66,7 @@ class NoteResponse(BaseModel):
     body: str = Field(description="Sanitized canonical HTML note content.")
     journal_date: date | None
     tags: list[str]
+    attachments: list[FileResponse]
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None

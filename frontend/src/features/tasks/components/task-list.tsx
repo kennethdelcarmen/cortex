@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, CalendarDays, Clock3, ListTodo, Pencil, Plus, Repeat2, SkipForward } from "lucide-react";
+import { ArrowRight, CalendarDays, Clock3, ListTodo, Paperclip, Pencil, Plus, Repeat2, SkipForward } from "lucide-react";
 import { useRef, type KeyboardEvent } from "react";
 import { TagBadge } from "@/components/tag-badge";
 import { Badge } from "@/components/ui/badge";
@@ -16,13 +16,13 @@ import { cn } from "@/lib/utils";
 import type { Task, TaskPriority, TaskStatus } from "../api";
 import type { Tag } from "@/features/tags/api";
 import {
-  dueUrgency,
   formatDateTime,
   priorityOption,
   statusOption,
   statusLabel,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  taskDueUrgency,
   urgencyLabel,
 } from "../utils";
 import { TaskOptionValue } from "./task-option-value";
@@ -164,7 +164,7 @@ function TaskRow({
 }) {
   const status = statusOption(task.status);
   const priority = priorityOption(task.priority);
-  const urgency = dueUrgency(task.due_at, now);
+  const urgency = taskDueUrgency(task, now);
 
   return (
     <li className="border-b border-border/70 last:border-b-0">
@@ -224,7 +224,8 @@ function TaskRow({
                 ) : (
                   <Clock3 aria-hidden="true" className="size-3.5" />
                 )}
-                {urgencyLabel(urgency)} · {formatDateTime(task.due_at)}
+                {urgency ? `${urgencyLabel(urgency)} · ` : null}
+                {formatDateTime(task.due_at)}
               </span>
             ) : !task.start_at ? (
               <span className="inline-flex items-center gap-1.5 font-mono">
@@ -247,6 +248,12 @@ function TaskRow({
               <span className="inline-flex items-center gap-1.5 font-medium text-destructive">
                 <SkipForward aria-hidden="true" className="size-3.5" />
                 Skipped
+              </span>
+            ) : null}
+            {task.attachments.length ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-primary-strong" title={`${task.attachments.length} attachment${task.attachments.length === 1 ? "" : "s"}`}>
+                <Paperclip aria-hidden="true" className="size-3.5" />
+                <span>{task.attachments.length}</span>
               </span>
             ) : null}
             {task.tags.map((tag) => (

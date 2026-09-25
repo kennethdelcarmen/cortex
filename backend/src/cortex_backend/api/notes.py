@@ -5,7 +5,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
+from ..attachments.errors import AttachmentError
 from ..auth.service import CurrentAuth
+from ..files.schemas import FileResponse
+from ..files.service import FileRecord
 from ..memory.errors import NoteError
 from ..memory.schemas import (
     NoteCreateRequest,
@@ -33,12 +36,26 @@ from .dependencies import get_current_auth, get_database_storage, require_csrf_a
 router = APIRouter(prefix="/api/v1/notes", tags=["notes"])
 
 
-def _raise_http(error: NoteError | TagError) -> None:
+def _raise_http(error: NoteError | TagError | AttachmentError) -> None:
     detail: dict[str, object] = {"code": error.code, "message": error.message}
     for attribute in ("unknown_tags", "allowed_tags"):
         if hasattr(error, attribute):
             detail[attribute] = getattr(error, attribute)
     raise HTTPException(status_code=error.status_code, detail=detail) from error
+
+
+def _file_response(record: FileRecord) -> FileResponse:
+    return FileResponse(
+        id=record.id,
+        name=record.name,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        tags=record.tags,
+        context_status=record.context_status,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        deleted_at=record.deleted_at,
+    )
 
 
 def _response(record: NoteRecord) -> NoteResponse:
@@ -48,6 +65,7 @@ def _response(record: NoteRecord) -> NoteResponse:
         body=record.body,
         journal_date=record.journal_date,
         tags=record.tags,
+        attachments=[_file_response(file) for file in record.attachments],
         created_at=record.created_at,
         updated_at=record.updated_at,
         deleted_at=record.deleted_at,
@@ -64,7 +82,7 @@ async def create_note_route(
 
     try:
         record = await create_note(storage, auth.user.id, payload)
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -118,7 +136,7 @@ async def list_notes_route(
                 cursor=cursor,
             ),
         )
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return NoteListResponse(
         items=[_response(record) for record in page.items],
@@ -136,7 +154,7 @@ async def get_note_route(
 
     try:
         record = await get_note(storage, auth.user.id, note_id)
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -152,7 +170,7 @@ async def update_note_route(
 
     try:
         record = await update_note(storage, auth.user.id, note_id, payload)
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -167,7 +185,7 @@ async def delete_note_route(
 
     try:
         await delete_note(storage, auth.user.id, note_id)
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -182,6 +200,6 @@ async def restore_note_route(
 
     try:
         record = await restore_note(storage, auth.user.id, note_id)
-    except (NoteError, TagError) as exc:
+    except (NoteError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)

@@ -8,6 +8,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from cortex_backend.attachments import models as _attachment_models  # noqa: F401
 from cortex_backend.auth.models import Base
 from cortex_backend.config import Settings
 from cortex_backend.files import models as _file_models  # noqa: F401

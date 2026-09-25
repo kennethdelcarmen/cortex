@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "@/lib/api/client";
+import { storedFileSchema } from "./files-api";
 import { tagColorSchema } from "@/features/tags/api";
 
 export const noteSchema = z.object({
@@ -8,6 +9,7 @@ export const noteSchema = z.object({
   body: z.string().min(1),
   journal_date: z.string().nullable(),
   tags: z.array(z.string()),
+  attachments: z.array(storedFileSchema),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
   deleted_at: z.string().nullable(),
@@ -43,6 +45,7 @@ export type NoteWriteInput = {
   body: string;
   journal_date: string | null;
   tags: string[];
+  file_ids: string[];
 };
 
 export const notesQueryKey = ["notes"] as const;

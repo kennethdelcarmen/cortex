@@ -147,6 +147,14 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         assert note_tag_columns == {"note_id", "tag_id"}
         file_tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(file_tags)")}
         assert file_tag_columns == {"file_id", "tag_id"}
+        note_file_columns = {row[1] for row in connection.execute("PRAGMA table_info(note_files)")}
+        task_file_columns = {row[1] for row in connection.execute("PRAGMA table_info(task_files)")}
+        task_series_file_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(task_series_files)")
+        }
+        assert note_file_columns == {"note_id", "file_id", "position"}
+        assert task_file_columns == {"task_id", "file_id", "position"}
+        assert task_series_file_columns == {"series_id", "file_id", "position"}
         assert connection.execute(
             "SELECT type FROM sqlite_master WHERE name = 'notes_fts'"
         ).fetchone() == ("table",)
@@ -242,7 +250,29 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_file_tags_tag_id",
             "ix_file_context_jobs_claim",
             "ix_file_artifacts_owner_hash",
+            "ix_note_files_file_id",
+            "ix_note_files_note_position",
+            "ix_task_files_file_id",
+            "ix_task_files_task_position",
+            "ix_task_series_files_file_id",
+            "ix_task_series_files_series_position",
         } <= indexes
+
+        for table, parent_table in (
+            ("note_files", "notes"),
+            ("task_files", "tasks"),
+            ("task_series_files", "task_series"),
+        ):
+            foreign_keys = connection.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+            assert {row[2] for row in foreign_keys} == {"files", parent_table}
+            assert all(row[6].upper() == "CASCADE" for row in foreign_keys)
+            assert (
+                connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+                    (f"uq_{table}_position",),
+                ).fetchone()
+                is not None
+            )
 
         file_indexes = list(connection.execute("PRAGMA index_list(files)"))
         assert any(row[2] == 1 for row in file_indexes)
@@ -255,7 +285,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0013_file_tags_search",
+            "0014_record_file_attachments",
         )
 
 

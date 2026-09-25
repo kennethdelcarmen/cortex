@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { FileAttachmentPicker } from "@/components/file-attachment-picker";
 import { TagPicker } from "@/components/tag-picker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskStatus } from "../api";
+import type { StoredFile } from "@/features/memory/files-api";
 import type { Tag, TagColor } from "@/features/tags/api";
 import {
   defaultRecurrenceValues,
@@ -41,6 +43,7 @@ export type TaskFormValues = {
   startAt: TaskDateTimeValue;
   dueAt: TaskDateTimeValue;
   tags: string[];
+  attachments: StoredFile[];
   recurrence: RecurrenceFormValues;
 };
 
@@ -69,6 +72,7 @@ function defaultFormValues(initialStartAt?: TaskDateTimeValue): TaskFormValues {
     startAt,
     dueAt,
     tags: [],
+    attachments: [],
     recurrence: defaultRecurrenceValues(startAt),
   };
 }
@@ -337,6 +341,13 @@ export function TaskCreateDialog({
                 />
               </div>
             </div>
+
+            <FileAttachmentPicker
+              id="task-create-attachments"
+              value={values.attachments}
+              onChange={(attachments) => updateValue("attachments", attachments)}
+              disabled={isSaving}
+            />
           </div>
 
           <DialogFooter className="mx-0! mb-0! flex-col-reverse items-stretch gap-2 rounded-none border-t border-border/70 bg-card px-6 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-7">
@@ -367,6 +378,7 @@ export function formValuesToPayload(values: TaskFormValues) {
     start_at: localDateTimePartsToIso(values.startAt),
     due_at: localDateTimePartsToIso(values.dueAt),
     tags: values.tags,
+    file_ids: values.attachments.map((file) => file.id),
     ...(recurrence ? { recurrence } : {}),
   };
 }

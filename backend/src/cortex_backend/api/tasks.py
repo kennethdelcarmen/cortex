@@ -5,7 +5,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
+from ..attachments.errors import AttachmentError
 from ..auth.service import CurrentAuth
+from ..files.schemas import FileResponse
+from ..files.service import FileRecord
 from ..storage import DatabaseStorage
 from ..tags.errors import TagError
 from ..tasks.errors import TaskError
@@ -55,12 +58,26 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 series_router = APIRouter(prefix="/api/v1/task-series", tags=["task-series"])
 
 
-def _raise_http(error: TaskError | TagError) -> None:
+def _raise_http(error: TaskError | TagError | AttachmentError) -> None:
     detail: dict[str, object] = {"code": error.code, "message": error.message}
     for attribute in ("unknown_tags", "allowed_tags"):
         if hasattr(error, attribute):
             detail[attribute] = getattr(error, attribute)
     raise HTTPException(status_code=error.status_code, detail=detail) from error
+
+
+def _file_response(record: FileRecord) -> FileResponse:
+    return FileResponse(
+        id=record.id,
+        name=record.name,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        tags=record.tags,
+        context_status=record.context_status,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        deleted_at=record.deleted_at,
+    )
 
 
 def _response(record: TaskRecord) -> TaskResponse:
@@ -74,6 +91,7 @@ def _response(record: TaskRecord) -> TaskResponse:
         start_at=record.start_at,
         due_at=record.due_at,
         tags=record.tags,
+        attachments=[_file_response(file) for file in record.attachments],
         created_at=record.created_at,
         updated_at=record.updated_at,
         series_id=record.series_id,
@@ -92,6 +110,7 @@ def _series_response(record: TaskSeriesRecord) -> TaskSeriesResponse:
         status=record.status,
         priority=record.priority,
         tags=record.tags,
+        attachments=[_file_response(file) for file in record.attachments],
         recurrence=TaskRecurrenceRequest.model_validate(
             {
                 "timezone": record.timezone,
@@ -121,7 +140,7 @@ async def create_task_route(
 
     try:
         record = await create_task(storage, auth.user.id, payload)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -136,7 +155,7 @@ async def task_summary_route(
 
     try:
         summary = await summarize_tasks(storage, auth.user.id, timezone)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return TaskSummaryResponse(
         all=summary.all,
@@ -192,7 +211,7 @@ async def list_tasks_route(
                 order=order,
             ),
         )
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return TaskListResponse(
         items=[_response(record) for record in page.items],
@@ -210,7 +229,7 @@ async def get_task_route(
 
     try:
         record = await get_task(storage, auth.user.id, task_id)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -226,7 +245,7 @@ async def reorder_task_route(
 
     try:
         record = await reorder_task(storage, auth.user.id, task_id, payload)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -242,7 +261,7 @@ async def update_task_route(
 
     try:
         record = await update_task(storage, auth.user.id, task_id, payload)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -257,7 +276,7 @@ async def delete_task_route(
 
     try:
         await delete_task(storage, auth.user.id, task_id)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -272,7 +291,7 @@ async def skip_task_route(
 
     try:
         record = await skip_task_occurrence(storage, auth.user.id, task_id)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _response(record)
 
@@ -285,7 +304,7 @@ async def list_task_series_route(
 ) -> TaskSeriesListResponse:
     try:
         page = await list_task_series(storage, auth.user.id, limit)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return TaskSeriesListResponse(items=[_series_response(item) for item in page.items])
 
@@ -298,7 +317,7 @@ async def get_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await get_task_series(storage, auth.user.id, series_id)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -312,7 +331,7 @@ async def update_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await update_task_series(storage, auth.user.id, series_id, payload)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -325,7 +344,7 @@ async def pause_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await pause_task_series(storage, auth.user.id, series_id)
-    except (TaskError, TagError) as exc:
+    except (TaskError, TagError, AttachmentError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -338,7 +357,7 @@ async def resume_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await resume_task_series(storage, auth.user.id, series_id)
-    except TaskError as exc:
+    except (TaskError, AttachmentError) as exc:
         _raise_http(exc)
     return _series_response(record)
 
@@ -351,6 +370,6 @@ async def end_task_series_route(
 ) -> TaskSeriesResponse:
     try:
         record = await end_task_series(storage, auth.user.id, series_id)
-    except TaskError as exc:
+    except (TaskError, AttachmentError) as exc:
         _raise_http(exc)
     return _series_response(record)

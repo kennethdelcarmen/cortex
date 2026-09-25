@@ -17,6 +17,15 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from ..attachments.service import (
+    attachments_for_series,
+    attachments_for_tasks,
+    copy_series_attachments,
+    delete_task_attachments,
+    replace_series_attachments,
+    replace_task_attachments,
+)
+from ..files.service import FileRecord
 from ..storage import DatabaseStorage
 from ..tags.schemas import TagColor
 from ..tags.service import existing_tag_names, resolve_tag_names
@@ -68,6 +77,7 @@ class TaskRecord:
     start_at: datetime | None
     due_at: datetime | None
     tags: list[str]
+    attachments: list[FileRecord]
     created_at: datetime
     updated_at: datetime
     series_id: str | None
@@ -85,6 +95,7 @@ class TaskSeriesRecord:
     status: TaskStatus
     priority: TaskPriority
     tags: list[str]
+    attachments: list[FileRecord]
     timezone: str
     frequency: str
     interval: int
@@ -209,7 +220,11 @@ def _required_utc(value: datetime) -> datetime:
     return normalized
 
 
-def _record(task: Task, tags: list[str]) -> TaskRecord:
+def _record(
+    task: Task,
+    tags: list[str],
+    attachments: list[FileRecord] | None = None,
+) -> TaskRecord:
     return TaskRecord(
         id=task.id,
         title=task.title,
@@ -220,6 +235,7 @@ def _record(task: Task, tags: list[str]) -> TaskRecord:
         start_at=_as_utc(task.start_at),
         due_at=_as_utc(task.due_at),
         tags=tags,
+        attachments=attachments or [],
         created_at=_required_utc(task.created_at),
         updated_at=_required_utc(task.updated_at),
         series_id=task.series_id,
@@ -305,7 +321,11 @@ async def _get_series_row(db: AsyncSession, user_id: str, series_id: str) -> Tas
     return series
 
 
-def _series_record(series: TaskSeries, tags: list[str]) -> TaskSeriesRecord:
+def _series_record(
+    series: TaskSeries,
+    tags: list[str],
+    attachments: list[FileRecord] | None = None,
+) -> TaskSeriesRecord:
     rule = recurrence_request(series.timezone, series.rule)
     return TaskSeriesRecord(
         id=series.id,
@@ -315,6 +335,7 @@ def _series_record(series: TaskSeries, tags: list[str]) -> TaskSeriesRecord:
         status=TaskStatus(series.status),
         priority=TaskPriority(series.priority),
         tags=tags,
+        attachments=attachments or [],
         timezone=rule.timezone,
         frequency=rule.frequency.value,
         interval=rule.interval,
@@ -429,6 +450,7 @@ async def _materialize_series(
                     .values(task_id=task_id, tag_id=tag_id)
                     .on_conflict_do_nothing()
                 )
+            await copy_series_attachments(db, series.id, task_id)
         series.materialized_through_at = occurrence.utc_at
 
     series.updated_at = now
@@ -536,6 +558,7 @@ async def create_task(
                 db.add(series)
                 await db.flush()
                 await _replace_series_tags(db, series.id, user_id, payload.tags)
+                await replace_series_attachments(db, user_id, series.id, payload.file_ids)
                 await _materialize_series(db, series, now)
                 first_occurrence = next(
                     iter_occurrences(
@@ -556,7 +579,12 @@ async def create_task(
                 )
                 assert task is not None
                 tags = await _tags_for_tasks(db, [task.id])
-                return _record(task, tags.get(task.id, []))
+                attachments = await attachments_for_tasks(db, user_id, [task.id])
+                return _record(
+                    task,
+                    tags.get(task.id, []),
+                    attachments.get(task.id, []),
+                )
 
             task = Task(
                 id=str(uuid4()),
@@ -578,8 +606,10 @@ async def create_task(
             db.add(task)
             await db.flush()
             await _replace_tags(db, task.id, user_id, payload.tags)
+            await replace_task_attachments(db, user_id, task.id, payload.file_ids)
             tags = await _tags_for_tasks(db, [task.id])
-            return _record(task, tags.get(task.id, []))
+            attachments = await attachments_for_tasks(db, user_id, [task.id])
+            return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
 
 
 async def get_task(storage: DatabaseStorage, user_id: str, task_id: str) -> TaskRecord:
@@ -588,7 +618,8 @@ async def get_task(storage: DatabaseStorage, user_id: str, task_id: str) -> Task
     async with storage.session() as db:
         task = await _get_task_row(db, user_id, task_id)
         tags = await _tags_for_tasks(db, [task.id])
-        return _record(task, tags.get(task.id, []))
+        attachments = await attachments_for_tasks(db, user_id, [task.id])
+        return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
 
 
 def _filter_fingerprint(filters: TaskListFilters) -> str:
@@ -874,6 +905,7 @@ async def list_tasks(
         rows = list((await db.scalars(stmt.limit(normalized_filters.limit + 1))).all())
         page_rows = rows[: normalized_filters.limit]
         tags = await _tags_for_tasks(db, [task.id for task in page_rows])
+        attachments = await attachments_for_tasks(db, user_id, [task.id for task in page_rows])
         if len(rows) > normalized_filters.limit:
             next_cursor = (
                 _encode_board_cursor(page_rows[-1], fingerprint)
@@ -883,7 +915,10 @@ async def list_tasks(
         else:
             next_cursor = None
         return TaskPage(
-            items=[_record(task, tags.get(task.id, [])) for task in page_rows],
+            items=[
+                _record(task, tags.get(task.id, []), attachments.get(task.id, []))
+                for task in page_rows
+            ],
             next_cursor=next_cursor,
         )
 
@@ -1022,10 +1057,13 @@ async def update_task(
                 task.priority = values["priority"].value
             if "tags" in values:
                 await _replace_tags(db, task.id, user_id, values["tags"])
+            if "file_ids" in values:
+                await replace_task_attachments(db, user_id, task.id, values["file_ids"] or [])
             task.updated_at = _utc_now()
             await db.flush()
             tags = await _tags_for_tasks(db, [task.id])
-            return _record(task, tags.get(task.id, []))
+            attachments = await attachments_for_tasks(db, user_id, [task.id])
+            return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
 
 
 async def reorder_task(
@@ -1075,7 +1113,8 @@ async def reorder_task(
             task.updated_at = _utc_now()
             await db.flush()
             tags = await _tags_for_tasks(db, [task.id])
-            return _record(task, tags.get(task.id, []))
+            attachments = await attachments_for_tasks(db, user_id, [task.id])
+            return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
 
 
 async def delete_task(storage: DatabaseStorage, user_id: str, task_id: str) -> None:
@@ -1119,7 +1158,8 @@ async def restore_task(
                 task.updated_at = _utc_now()
                 await db.flush()
             tags = await _tags_for_tasks(db, [task.id])
-            return _record(task, tags.get(task.id, []))
+            attachments = await attachments_for_tasks(db, user_id, [task.id])
+            return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
 
 
 async def permanently_delete_task(
@@ -1135,6 +1175,7 @@ async def permanently_delete_task(
             if task.deleted_at is None:
                 raise TaskMustBeDeletedError()
             await db.execute(delete(TaskTag).where(TaskTag.task_id == task.id))
+            await delete_task_attachments(db, task.id)
             await db.delete(task)
             await db.flush()
 
@@ -1149,7 +1190,8 @@ async def get_task_series(
     async with storage.session() as db:
         series = await _get_series_row(db, user_id, series_id)
         tags = await _series_tags_for_series(db, series.id)
-        return _series_record(series, tags)
+        attachments = await attachments_for_series(db, user_id, [series.id])
+        return _series_record(series, tags, attachments.get(series.id, []))
 
 
 async def list_task_series(
@@ -1174,9 +1216,18 @@ async def list_task_series(
                 )
             ).all()
         )
+        attachments = await attachments_for_series(
+            db,
+            user_id,
+            [series.id for series in series_rows],
+        )
         return TaskSeriesPage(
             items=[
-                _series_record(series, await _series_tags_for_series(db, series.id))
+                _series_record(
+                    series,
+                    await _series_tags_for_series(db, series.id),
+                    attachments.get(series.id, []),
+                )
                 for series in series_rows
             ]
         )
@@ -1207,6 +1258,7 @@ async def _apply_series_template(
     tasks: list[Task],
     tag_names: tuple[str, ...],
     now: datetime,
+    attachment_ids: list[str] | None = None,
 ) -> None:
     for task in tasks:
         if task.status != series.status:
@@ -1216,6 +1268,8 @@ async def _apply_series_template(
         task.priority = series.priority
         task.updated_at = now
         await _replace_tags(db, task.id, series.user_id, list(tag_names))
+        if attachment_ids is not None:
+            await replace_task_attachments(db, series.user_id, task.id, attachment_ids)
 
 
 async def update_task_series(
@@ -1248,6 +1302,17 @@ async def update_task_series(
             if "tags" in values and payload.tags is not None:
                 tag_names = normalize_tag_names(payload.tags)
                 await _replace_series_tags(db, series.id, user_id, list(tag_names))
+
+            attachment_ids: list[str] | None = None
+            if "file_ids" in values:
+                await replace_series_attachments(
+                    db,
+                    user_id,
+                    series.id,
+                    payload.file_ids or [],
+                )
+                series_attachments = await attachments_for_series(db, user_id, [series.id])
+                attachment_ids = [file.id for file in series_attachments.get(series.id, [])]
 
             future_tasks = await _future_series_tasks(db, series.id, now)
             if recurrence_changed:
@@ -1291,12 +1356,20 @@ async def update_task_series(
                 future_tasks = applicable_tasks
                 series.materialized_through_at = None
 
-            await _apply_series_template(db, series, future_tasks, tag_names, now)
+            await _apply_series_template(
+                db,
+                series,
+                future_tasks,
+                tag_names,
+                now,
+                attachment_ids,
+            )
             series.updated_at = now
             if series.state == "active":
                 await _materialize_series(db, series, now)
             await db.flush()
-            return _series_record(series, list(tag_names))
+            attachments = await attachments_for_series(db, user_id, [series.id])
+            return _series_record(series, list(tag_names), attachments.get(series.id, []))
 
 
 async def _transition_series(
@@ -1326,7 +1399,12 @@ async def _transition_series(
                 series.paused_at = None
                 await _materialize_series(db, series, now)
             await db.flush()
-            return _series_record(series, await _series_tags_for_series(db, series.id))
+            attachments = await attachments_for_series(db, user_id, [series.id])
+            return _series_record(
+                series,
+                await _series_tags_for_series(db, series.id),
+                attachments.get(series.id, []),
+            )
 
 
 async def pause_task_series(
@@ -1373,4 +1451,5 @@ async def skip_task_occurrence(
             task.updated_at = now
             await db.flush()
             tags = await _tags_for_tasks(db, [task.id])
-            return _record(task, tags.get(task.id, []))
+            attachments = await attachments_for_tasks(db, user_id, [task.id])
+            return _record(task, tags.get(task.id, []), attachments.get(task.id, []))

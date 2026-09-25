@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "@/lib/api/client";
+import { storedFileSchema } from "@/features/memory/files-api";
 import { tagColorSchema } from "@/features/tags/api";
 
 export const taskStatusSchema = z.enum([
@@ -46,6 +47,7 @@ export const taskSchema = z.object({
   start_at: z.string().min(1).nullable(),
   due_at: z.string().min(1).nullable(),
   tags: z.array(z.string()),
+  attachments: z.array(storedFileSchema),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
   series_id: z.string().min(1).nullable(),
@@ -83,6 +85,7 @@ const taskSeriesSchema = z.object({
   status: taskStatusSchema,
   priority: taskPrioritySchema,
   tags: z.array(z.string()),
+  attachments: z.array(storedFileSchema),
   recurrence: taskRecurrenceSchema,
   materialized_through_at: z.string().min(1).nullable(),
   created_at: z.string().min(1),
@@ -138,9 +141,10 @@ export type TaskWriteInput = {
   due_at: string | null;
   tags: string[];
   recurrence?: TaskRecurrenceInput;
+  file_ids: string[];
 };
 
-export type TaskEditableField = Exclude<keyof TaskWriteInput, "recurrence">;
+export type TaskEditableField = Exclude<keyof TaskWriteInput, "recurrence" | "file_ids"> | "attachments";
 export type TaskUpdateInput = Partial<Omit<TaskWriteInput, "recurrence">>;
 
 export const taskQueryKey = ["tasks"] as const;
@@ -274,6 +278,7 @@ export type TaskSeriesUpdateInput = {
   priority?: TaskPriority;
   tags?: string[];
   recurrence?: TaskRecurrenceInput;
+  file_ids?: string[];
 };
 
 export function updateTaskSeries(seriesId: string, payload: TaskSeriesUpdateInput) {

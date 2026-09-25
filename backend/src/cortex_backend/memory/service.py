@@ -15,6 +15,12 @@ from uuid import uuid4
 from sqlalchemy import and_, delete, exists, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..attachments.service import (
+    attachments_for_notes,
+    delete_note_attachments,
+    replace_note_attachments,
+)
+from ..files.service import FileRecord
 from ..storage import DatabaseStorage
 from ..tags.schemas import TagColor
 from ..tags.service import existing_tag_names, resolve_tag_names
@@ -45,6 +51,7 @@ class NoteRecord:
     body: str
     journal_date: date | None
     tags: list[str]
+    attachments: list[FileRecord]
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -98,7 +105,11 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _record(note: Note, tags: list[str]) -> NoteRecord:
+def _record(
+    note: Note,
+    tags: list[str],
+    attachments: list[FileRecord] | None = None,
+) -> NoteRecord:
     return NoteRecord(
         id=note.id,
         user_id=note.user_id,
@@ -106,6 +117,7 @@ def _record(note: Note, tags: list[str]) -> NoteRecord:
         body=note.body,
         journal_date=note.journal_date,
         tags=tags,
+        attachments=attachments or [],
         created_at=_as_utc(note.created_at),
         updated_at=_as_utc(note.updated_at),
         deleted_at=_as_utc(note.deleted_at) if note.deleted_at is not None else None,
@@ -282,9 +294,11 @@ async def create_note(
             db.add(note)
             await db.flush()
             await _replace_tags(db, note.id, user_id, payload.tags)
+            await replace_note_attachments(db, user_id, note.id, payload.file_ids)
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
+            attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
             await _sync_fts(db, note, tags)
-            return _record(note, tags)
+            return _record(note, tags, attachments)
 
 
 async def get_note(storage: DatabaseStorage, user_id: str, note_id: str) -> NoteRecord:
@@ -293,7 +307,8 @@ async def get_note(storage: DatabaseStorage, user_id: str, note_id: str) -> Note
     async with storage.session() as db:
         note = await _get_note_row(db, user_id, note_id)
         tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
-        return _record(note, tags)
+        attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
+        return _record(note, tags, attachments)
 
 
 async def update_note(
@@ -317,12 +332,15 @@ async def update_note(
                 note.journal_date = payload.journal_date
             if "tags" in fields:
                 await _replace_tags(db, note.id, user_id, payload.tags or [])
+            if "file_ids" in fields:
+                await replace_note_attachments(db, user_id, note.id, payload.file_ids or [])
             if fields:
                 note.updated_at = now
             await db.flush()
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
+            attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
             await _sync_fts(db, note, tags)
-            return _record(note, tags)
+            return _record(note, tags, attachments)
 
 
 async def delete_note(storage: DatabaseStorage, user_id: str, note_id: str) -> None:
@@ -353,7 +371,8 @@ async def restore_note(
                 note.updated_at = now
                 await db.flush()
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
-            return _record(note, tags)
+            attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
+            return _record(note, tags, attachments)
 
 
 async def permanently_delete_note(
@@ -373,6 +392,7 @@ async def permanently_delete_note(
                 {"note_id": note.id},
             )
             await db.execute(delete(NoteTag).where(NoteTag.note_id == note.id))
+            await delete_note_attachments(db, note.id)
             await db.delete(note)
             await db.flush()
 
@@ -449,11 +469,23 @@ async def list_notes(
         rows = list((await db.scalars(stmt.limit(normalized.limit + 1))).all())
         page_rows = rows[: normalized.limit]
         tags_by_note = await _tags_for_notes(db, [note.id for note in page_rows])
+        attachments_by_note = await attachments_for_notes(
+            db,
+            user_id,
+            [note.id for note in page_rows],
+        )
         next_cursor = (
             _encode_cursor(page_rows[-1], fingerprint) if len(rows) > normalized.limit else None
         )
         return NotePage(
-            items=[_record(note, tags_by_note.get(note.id, [])) for note in page_rows],
+            items=[
+                _record(
+                    note,
+                    tags_by_note.get(note.id, []),
+                    attachments_by_note.get(note.id, []),
+                )
+                for note in page_rows
+            ],
             next_cursor=next_cursor,
         )
 

@@ -87,6 +87,7 @@ import {
   WorkspaceShell,
 } from "@/features/workspace/components/workspace-shell";
 import { useCurrentUser } from "@/features/auth/hooks";
+import { filesQueryKey } from "@/features/memory/files-api";
 
 const statusOrder = new Map<TaskStatus, number>(
   TASK_STATUSES.map((status, index) => [status.value, index]),
@@ -611,6 +612,7 @@ export function TasksPage({ email }: { email: string }) {
       });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: filesQueryKey });
       setCreateDialogOpen(false);
       feedback.success({ title: "Task added to the list." });
     },
@@ -647,10 +649,12 @@ export function TasksPage({ email }: { email: string }) {
     onMutate: async (variables) => {
       await queryClient.cancelQueries({ queryKey: taskQueryKey });
       const previousTask = getCachedTask(variables.taskId);
-      const previousValue = previousTask?.[variables.field];
-      const optimisticValue = variables.payload[variables.field];
+      const previousValue = variables.field === "attachments" ? undefined : previousTask?.[variables.field];
+      const optimisticValue = variables.field === "attachments" ? undefined : variables.payload[variables.field];
 
-      updateTaskInCache(variables.taskId, (task) => ({ ...task, ...variables.payload }));
+      if (variables.field !== "attachments") {
+        updateTaskInCache(variables.taskId, (task) => ({ ...task, ...variables.payload }));
+      }
 
       return { previousValue, optimisticValue };
     },
@@ -676,6 +680,7 @@ export function TasksPage({ email }: { email: string }) {
       });
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: filesQueryKey });
 
       if (variables.notify !== false) {
         feedback.success({
@@ -686,6 +691,9 @@ export function TasksPage({ email }: { email: string }) {
     onError: (error, variables, context) => {
       if (context) {
         updateTaskInCache(variables.taskId, (task) => {
+          if (variables.field === "attachments") {
+            return task;
+          }
           if (task[variables.field] !== context.optimisticValue) {
             return task;
           }
@@ -716,6 +724,7 @@ export function TasksPage({ email }: { email: string }) {
       void queryClient.invalidateQueries({ queryKey: taskQueryKey });
       void queryClient.invalidateQueries({ queryKey: taskSummaryQueryKey });
       void queryClient.invalidateQueries({ queryKey: taskSeriesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: filesQueryKey });
       setSeriesEditOpen(false);
       feedback.success({ title: "Recurring task updated." });
     },

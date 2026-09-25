@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..files.schemas import FileResponse
 from ..tags.schemas import TagColor
 
 
@@ -119,6 +120,7 @@ class TaskCreateRequest(BaseModel):
     due_at: datetime | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
     recurrence: TaskRecurrenceRequest | None = None
+    file_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator("title")
     @classmethod
@@ -141,6 +143,7 @@ class TaskUpdateRequest(BaseModel):
     start_at: datetime | None = None
     due_at: datetime | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
+    file_ids: list[str] | None = Field(default=None, max_length=20)
 
     @field_validator("title")
     @classmethod
@@ -179,6 +182,7 @@ class TaskResponse(BaseModel):
     start_at: datetime | None
     due_at: datetime | None
     tags: list[str]
+    attachments: list[FileResponse]
     created_at: datetime
     updated_at: datetime
     series_id: str | None
@@ -194,6 +198,7 @@ class TaskSeriesUpdateRequest(BaseModel):
     priority: TaskPriority | None = None
     tags: list[str] | None = Field(default=None, max_length=20)
     recurrence: TaskRecurrenceRequest | None = None
+    file_ids: list[str] | None = Field(default=None, max_length=20)
 
     @field_validator("title")
     @classmethod
@@ -216,6 +221,7 @@ class TaskSeriesResponse(BaseModel):
     status: TaskStatus
     priority: TaskPriority
     tags: list[str]
+    attachments: list[FileResponse]
     recurrence: TaskRecurrenceRequest
     materialized_through_at: datetime | None
     created_at: datetime

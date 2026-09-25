@@ -328,6 +328,17 @@ export function dueUrgency(value: string | null, now = new Date()): DueUrgency |
   return "upcoming";
 }
 
+export function taskDueUrgency(
+  task: Pick<Task, "due_at" | "status">,
+  now = new Date(),
+): DueUrgency | null {
+  if (task.status === "done" || task.status === "canceled") {
+    return null;
+  }
+
+  return dueUrgency(task.due_at, now);
+}
+
 export function urgencyLabel(urgency: DueUrgency | null) {
   switch (urgency) {
     case "overdue":
@@ -344,9 +355,9 @@ export function urgencyLabel(urgency: DueUrgency | null) {
 }
 
 export function isDueToday(task: Task, now = new Date()) {
-  return dueUrgency(task.due_at, now) === "today";
+  return taskDueUrgency(task, now) === "today";
 }
 
 export function isOverdue(task: Task, now = new Date()) {
-  return dueUrgency(task.due_at, now) === "overdue";
+  return taskDueUrgency(task, now) === "overdue";
 }

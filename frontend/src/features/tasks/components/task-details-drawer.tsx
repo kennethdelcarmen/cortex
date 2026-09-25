@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Repeat2, SkipForward, Square, X } from "lucide-react";
+import { FileAttachmentPicker } from "@/components/file-attachment-picker";
 import { TagPicker } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import type {
   TaskUpdateInput,
 } from "../api";
 import type { Tag, TagColor } from "@/features/tags/api";
+import type { StoredFile } from "@/features/memory/files-api";
 import {
   recurrenceSummary,
   recurrenceValuesFromPayload,
@@ -65,6 +67,7 @@ type TaskDraft = {
   startAt: TaskDateTimeValue;
   dueAt: TaskDateTimeValue;
   tags: string[];
+  attachments: StoredFile[];
 };
 
 type FieldFeedback = {
@@ -81,6 +84,7 @@ function taskToDraft(task: Task | null): TaskDraft {
     startAt: toLocalDateTimeParts(task?.start_at ?? null),
     dueAt: toLocalDateTimeParts(task?.due_at ?? null),
     tags: task?.tags ?? [],
+    attachments: task?.attachments ?? [],
   };
 }
 
@@ -108,6 +112,8 @@ function fieldLabel(field: TaskEditableField) {
       return "Due";
     case "tags":
       return "Tags";
+    case "attachments":
+      return "Attachments";
   }
 }
 
@@ -237,6 +243,8 @@ export function TaskDetailsDrawer({
         }
         return { payload: { tags } };
       }
+      case "attachments":
+        return { payload: { file_ids: draft.attachments.map((file) => file.id) } };
     }
   }
 
@@ -540,6 +548,20 @@ export function TaskDetailsDrawer({
                     />
                   </div>
                   <FieldState field="tags" feedback={feedback.tags} />
+                </div>
+
+                <div>
+                  <FileAttachmentPicker
+                    id="task-details-attachments"
+                    value={values.attachments}
+                    onChange={(attachments) => {
+                      const nextValues = { ...values, attachments };
+                      setValues(nextValues);
+                      void saveField("attachments", nextValues);
+                    }}
+                    disabled={feedback.attachments?.state === "saving"}
+                  />
+                  <FieldState field="attachments" feedback={feedback.attachments} />
                 </div>
               </div>
             ) : null}

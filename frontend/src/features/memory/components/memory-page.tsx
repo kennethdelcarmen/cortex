@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronRight,
   LoaderCircle,
+  Paperclip,
   Pencil,
   Plus,
   Search,
@@ -20,6 +21,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
+import { FileAttachmentPicker } from "@/components/file-attachment-picker";
 import { TagBadge } from "@/components/tag-badge";
 import { TagPicker } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
@@ -54,12 +56,14 @@ import {
 import { useCurrentUser } from "@/features/auth/hooks";
 import type { Tag, TagColor } from "@/features/tags/api";
 import { createTag, getTags, tagsQueryKey } from "@/features/tags/api";
+import { filesQueryKey, type StoredFile } from "../files-api";
 
 type NoteDraft = {
   title: string;
   body: string;
   journalDate: string;
   tags: string[];
+  attachments: StoredFile[];
 };
 
 const todayFormatter = new Intl.DateTimeFormat(undefined, {
@@ -120,6 +124,7 @@ function createBlankDraft(): NoteDraft {
     body: "",
     journalDate: localDateInput(),
     tags: [],
+    attachments: [],
   };
 }
 
@@ -129,6 +134,7 @@ function noteToDraft(note: Note): NoteDraft {
     body: note.body,
     journalDate: note.journal_date ?? "",
     tags: note.tags,
+    attachments: note.attachments,
   };
 }
 
@@ -138,6 +144,7 @@ function draftPayload(draft: NoteDraft): NoteWriteInput {
     body: draft.body.trim(),
     journal_date: draft.journalDate || null,
     tags: draft.tags,
+    file_ids: draft.attachments.map((file) => file.id),
   };
 }
 
@@ -253,6 +260,11 @@ function NoteListItem({
           <span>{formatJournalDate(note.journal_date)}</span>
           <span aria-hidden="true">·</span>
           <span>{formatUpdatedAt(note.updated_at)}</span>
+          {note.attachments.length ? (
+            <span className="inline-flex items-center gap-1">
+              <Paperclip aria-hidden="true" className="size-3" /> {note.attachments.length}
+            </span>
+          ) : null}
           {note.tags.slice(0, 2).map((tag) => (
             <span key={tag} className="text-primary-strong">
               #{tag}
@@ -434,6 +446,14 @@ function NotePanel({
             )}
           </div>
         )}
+        <div className="mt-5">
+          <FileAttachmentPicker
+            id="note-attachments"
+            value={editing ? draft.attachments : note?.attachments ?? []}
+            onChange={(attachments) => onDraftChange({ ...draft, attachments })}
+            disabled={!editing || saving}
+          />
+        </div>
       </header>
 
       <div className="memory-editor px-5 py-6 sm:px-7 sm:py-8">
@@ -644,6 +664,7 @@ function MemoryWorkspace() {
       );
       void queryClient.invalidateQueries({ queryKey: notesQueryKey });
       void queryClient.invalidateQueries({ queryKey: noteSummaryQueryKey });
+      void queryClient.invalidateQueries({ queryKey: filesQueryKey });
       setDraft(noteToDraft(savedNote));
       setEditing(false);
       updateUrl((params) => params.set("note", savedNote.id));

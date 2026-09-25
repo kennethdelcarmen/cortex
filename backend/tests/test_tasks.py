@@ -88,6 +88,16 @@ async def create_task(client: AsyncClient, payload: dict[str, object]):
     )
 
 
+async def upload_file(client: AsyncClient, content: bytes, filename: str) -> str:
+    response = await client.post(
+        "/api/v1/files",
+        headers=await csrf_headers(client),
+        files={"file": (filename, content, "text/plain")},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
 async def test_tasks_require_authentication(client: AsyncClient) -> None:
     response = await client.get("/api/v1/tasks")
 
@@ -669,6 +679,65 @@ async def test_recurring_task_materializes_idempotently_and_supports_series_acti
     )
     assert ended.status_code == 200
     assert ended.json()["state"] == "ended"
+
+
+async def test_task_and_series_attachments_inherit_and_preserve_occurrence_edits(
+    client: AsyncClient,
+    monkeypatch,
+) -> None:
+    await setup_owner(client)
+    first_file = await upload_file(client, b"first", "first.txt")
+    second_file = await upload_file(client, b"second", "second.txt")
+    now = datetime(2027, 1, 1, 9, 0, tzinfo=UTC)
+    monkeypatch.setattr("cortex_backend.tasks.service._utc_now", lambda: now)
+
+    created = await create_task(
+        client,
+        {
+            "title": "Attachment series",
+            "due_at": now.isoformat(),
+            "file_ids": [first_file],
+            "recurrence": {"timezone": "UTC", "frequency": "daily"},
+        },
+    )
+    assert created.status_code == 201
+    first = created.json()
+    assert [file["id"] for file in first["attachments"]] == [first_file]
+
+    listed = (await client.get("/api/v1/tasks", params={"limit": 100})).json()["items"]
+    same_series = [item for item in listed if item["series_id"] == first["series_id"]]
+    assert same_series
+    assert all([file["id"] for file in item["attachments"]] == [first_file] for item in same_series)
+
+    custom = same_series[1]
+    custom_update = await client.patch(
+        f"/api/v1/tasks/{custom['id']}",
+        headers=await csrf_headers(client),
+        json={"file_ids": []},
+    )
+    assert custom_update.status_code == 200
+    assert custom_update.json()["attachments"] == []
+    assert custom_update.json()["series_exception"] is True
+
+    monkeypatch.setattr(
+        "cortex_backend.tasks.service._utc_now",
+        lambda: now + timedelta(days=2),
+    )
+    series_update = await client.patch(
+        f"/api/v1/task-series/{first['series_id']}",
+        headers=await csrf_headers(client),
+        json={"file_ids": [second_file]},
+    )
+    assert series_update.status_code == 200
+    assert [file["id"] for file in series_update.json()["attachments"]] == [second_file]
+
+    past = await client.get(f"/api/v1/tasks/{first['id']}")
+    assert [file["id"] for file in past.json()["attachments"]] == [first_file]
+    customized = await client.get(f"/api/v1/tasks/{custom['id']}")
+    assert customized.json()["attachments"] == []
+    future = same_series[2]
+    propagated = await client.get(f"/api/v1/tasks/{future['id']}")
+    assert [file["id"] for file in propagated.json()["attachments"]] == [second_file]
 
 
 async def test_recurring_task_requires_anchor_and_valid_timezone(client: AsyncClient) -> None:

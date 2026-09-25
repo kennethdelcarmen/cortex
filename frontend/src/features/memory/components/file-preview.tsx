@@ -211,6 +211,8 @@ export function FilePreviewDrawer({
   availableTags,
   onCreateTag,
   onTagsChange,
+  showTags = true,
+  allowDelete = true,
 }: {
   file: StoredFile | null;
   open: boolean;
@@ -223,6 +225,8 @@ export function FilePreviewDrawer({
   availableTags: Tag[];
   onCreateTag: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   onTagsChange: (tags: string[]) => Promise<void>;
+  showTags?: boolean;
+  allowDelete?: boolean;
 }) {
   const [context, setContext] = useState<FileContext | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -348,18 +352,20 @@ export function FilePreviewDrawer({
             <DrawerDescription>
               {file ? "PDF preview and extracted context." : ""}
             </DrawerDescription>
-            <div className="mt-3 min-w-0">
-              <TagPicker
-                id="file-tags"
-                presentation="popover"
-                tags={availableTags}
-                value={fileTags}
-                onChange={(nextTags) => void saveTags(nextTags)}
-                onCreateTag={onCreateTag}
-                disabled={tagSaving || !file}
-              />
-              {tagSaveError ? <p className="mt-2 text-xs text-destructive" role="alert">{tagSaveError}</p> : null}
-            </div>
+            {showTags ? (
+              <div className="mt-3 min-w-0">
+                <TagPicker
+                  id="file-tags"
+                  presentation="popover"
+                  tags={availableTags}
+                  value={fileTags}
+                  onChange={(nextTags) => void saveTags(nextTags)}
+                  onCreateTag={onCreateTag}
+                  disabled={tagSaving || !file}
+                />
+                {tagSaveError ? <p className="mt-2 text-xs text-destructive" role="alert">{tagSaveError}</p> : null}
+              </div>
+            ) : null}
           </DrawerHeader>
           <div className="overflow-auto px-5 py-5 sm:px-7">
             {loading && !context ? (
@@ -389,16 +395,18 @@ export function FilePreviewDrawer({
               {downloading ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <Download data-icon="inline-start" />}
               Download source
             </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              className="border-destructive/30 bg-destructive/15 hover:bg-destructive/25"
-              onClick={onDelete}
-              disabled={deleting || !file}
-            >
-              Remove
-            </Button>
+            {allowDelete ? (
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="border-destructive/30 bg-destructive/15 hover:bg-destructive/25"
+                onClick={onDelete}
+                disabled={deleting || !file}
+              >
+                Remove
+              </Button>
+            ) : null}
             <DrawerClose render={<Button type="button" variant="ghost" size="sm" />}>Close</DrawerClose>
           </DrawerFooter>
         </div>

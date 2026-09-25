@@ -162,6 +162,16 @@ async def create_note(client: AsyncClient, payload: dict[str, object]):
     )
 
 
+async def upload_file(client: AsyncClient, content: bytes, filename: str) -> str:
+    response = await client.post(
+        "/api/v1/files",
+        headers=await csrf_headers(client),
+        files={"file": (filename, content, "text/plain")},
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
 async def test_notes_require_authentication(client: AsyncClient) -> None:
     response = await client.get("/api/v1/notes")
 
@@ -228,6 +238,77 @@ async def test_note_crud_tags_soft_delete_and_restore(client: AsyncClient) -> No
     assert restored.status_code == 200
     assert restored.json()["deleted_at"] is None
     assert (await client.get(f"/api/v1/notes/{note_id}")).status_code == 200
+
+
+async def test_note_attachments_reuse_and_follow_file_lifecycle(client: AsyncClient) -> None:
+    await setup_owner(client)
+    file_id = await upload_file(client, b"shared note context", "context.txt")
+    first = await create_note(
+        client,
+        {"body": "First note", "file_ids": [file_id, file_id]},
+    )
+    second = await create_note(
+        client,
+        {"body": "Second note", "file_ids": [file_id]},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert [item["id"] for item in first.json()["attachments"]] == [file_id]
+    assert [item["id"] for item in second.json()["attachments"]] == [file_id]
+
+    deleted = await client.delete(
+        f"/api/v1/files/{file_id}",
+        headers=await csrf_headers(client),
+    )
+    assert deleted.status_code == 204
+    assert (await client.get(f"/api/v1/notes/{first.json()['id']}")).json()["attachments"] == []
+
+    restored = await client.post(
+        f"/api/v1/files/{file_id}/restore",
+        headers=await csrf_headers(client),
+    )
+    assert restored.status_code == 200
+    restored_note = await client.get(f"/api/v1/notes/{first.json()['id']}")
+    assert [item["id"] for item in restored_note.json()["attachments"]] == [file_id]
+
+    second_file = await upload_file(client, b"replacement", "replacement.txt")
+    await client.delete(f"/api/v1/files/{file_id}", headers=await csrf_headers(client))
+    replaced = await client.patch(
+        f"/api/v1/notes/{first.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"file_ids": [second_file]},
+    )
+    assert replaced.status_code == 200
+    assert [item["id"] for item in replaced.json()["attachments"]] == [second_file]
+    restored_again = await client.post(
+        f"/api/v1/files/{file_id}/restore",
+        headers=await csrf_headers(client),
+    )
+    assert restored_again.status_code == 200
+    visible_after_restore = await client.get(f"/api/v1/notes/{first.json()['id']}")
+    assert [item["id"] for item in visible_after_restore.json()["attachments"]] == [
+        file_id,
+        second_file,
+    ]
+
+    await client.delete(f"/api/v1/files/{file_id}", headers=await csrf_headers(client))
+    permanently_deleted = await client.post(
+        "/api/v1/recovery/permanent-delete",
+        headers=await csrf_headers(client),
+        json={"items": [{"type": "file", "id": file_id}]},
+    )
+    assert permanently_deleted.status_code == 200
+    assert permanently_deleted.json()["results"][0]["status"] == "permanently_deleted"
+    remaining = await client.get(f"/api/v1/notes/{first.json()['id']}")
+    assert [item["id"] for item in remaining.json()["attachments"]] == [second_file]
+
+    invalid = await client.patch(
+        f"/api/v1/notes/{first.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"file_ids": ["not-owned"]},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_attachment"
 
 
 async def test_note_listing_filters_search_and_cursor(client: AsyncClient) -> None:
