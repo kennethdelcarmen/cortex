@@ -7,7 +7,13 @@ from fastmcp.exceptions import ToolError
 
 from .api.mcp import database_storage, get_mcp_auth
 from .files.errors import FileError
-from .files.schemas import FileContextResponse, FileListResponse, FileResponse
+from .files.schemas import (
+    FileContextResponse,
+    FileContextStatus,
+    FileListResponse,
+    FileResponse,
+    FileUpdateRequest,
+)
 from .files.service import (
     DEFAULT_CONTEXT_CHARACTERS,
     MAX_CONTEXT_CHARACTERS,
@@ -18,6 +24,7 @@ from .files.service import (
     get_file_context,
     list_files,
     restore_file,
+    update_file,
 )
 from .files.storage import FileBlobStore
 from .logs.errors import ActivityLogError
@@ -167,6 +174,7 @@ def _file_response(record: FileRecord) -> FileResponse:
         name=record.name,
         size_bytes=record.size_bytes,
         sha256=record.sha256,
+        tags=record.tags,
         context_status=record.context_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -275,7 +283,7 @@ def create_mcp_server(
 
     @server.tool(name="list_tags")
     async def list_tags_tool(ctx: Context | None = None) -> TagListResponse:
-        """List active shared tags for note and task creation or updates."""
+        """List active shared tags for note, task, and file updates."""
 
         del ctx
         records = await list_tags(
@@ -299,6 +307,9 @@ def create_mcp_server(
     @server.tool(name="list_files")
     async def list_files_tool(
         include_deleted: bool = False,
+        tag: list[str] | None = None,
+        search: str | None = None,
+        context_status: list[FileContextStatus] | None = None,
         limit: int = 50,
         cursor: str | None = None,
         ctx: Context | None = None,
@@ -312,6 +323,9 @@ def create_mcp_server(
                 get_mcp_auth().user.id,
                 FileListFilters(
                     include_deleted=include_deleted,
+                    tags=tuple(tag or ()),
+                    search=search,
+                    context_statuses=tuple(context_status or ()),
                     limit=limit,
                     cursor=cursor,
                 ),
@@ -322,6 +336,28 @@ def create_mcp_server(
             items=[_file_response(record) for record in page.items],
             next_cursor=page.next_cursor,
         )
+
+    @server.tool(name="update_file")
+    async def update_file_tool(
+        file_id: str,
+        payload: FileUpdateRequest,
+        ctx: Context,
+    ) -> FileResponse:
+        """Replace one active file's shared catalog tags."""
+
+        del ctx
+        try:
+            record = await update_file(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                file_id,
+                payload,
+            )
+        except FileError as exc:
+            _raise_file_tool(exc)
+        except TagError as exc:
+            _raise_tool(exc)
+        return _file_response(record)
 
     @server.tool(name="get_file")
     async def get_file_tool(file_id: str, ctx: Context) -> FileResponse:

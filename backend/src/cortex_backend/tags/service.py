@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..files.models import File, FileTag
 from ..memory.content import html_to_text
 from ..memory.models import Note, NoteTag
 from ..storage import DatabaseStorage
@@ -137,6 +138,7 @@ async def update_tag(
                     raise TagNameConflictError()
                 tag.name = name
                 await _refresh_note_search_for_tag(db, tag.id)
+                await _refresh_file_search_for_tag(db, tag.id)
             if payload.color is not None:
                 tag.color = payload.color.value
             await db.flush()
@@ -177,12 +179,17 @@ async def permanently_delete_tag(
             note_ids = list(
                 (await db.scalars(select(NoteTag.note_id).where(NoteTag.tag_id == tag.id))).all()
             )
+            file_ids = list(
+                (await db.scalars(select(FileTag.file_id).where(FileTag.tag_id == tag.id))).all()
+            )
             await db.execute(delete(NoteTag).where(NoteTag.tag_id == tag.id))
+            await db.execute(delete(FileTag).where(FileTag.tag_id == tag.id))
             await db.execute(delete(TaskTag).where(TaskTag.tag_id == tag.id))
             await db.execute(delete(TaskSeriesTag).where(TaskSeriesTag.tag_id == tag.id))
             await db.delete(tag)
             await db.flush()
             await _refresh_note_search_for_notes(db, note_ids)
+            await _refresh_file_search_for_files(db, file_ids)
 
 
 async def resolve_tag_names(
@@ -227,7 +234,7 @@ async def resolve_tag_names(
 
 async def existing_tag_names(
     db: AsyncSession,
-    association_model: type[TaskTag] | type[TaskSeriesTag] | type[NoteTag],
+    association_model: type[TaskTag] | type[TaskSeriesTag] | type[NoteTag] | type[FileTag],
     owner_id: str,
 ) -> set[str]:
     """Return names already attached to one record for safe inactive retention."""
@@ -244,11 +251,17 @@ async def existing_tag_names(
             .join(TaskSeriesTag, TaskSeriesTag.tag_id == Tag.id)
             .where(TaskSeriesTag.series_id == owner_id)
         )
-    else:
+    elif association_model is NoteTag:
         stmt = (
             select(Tag.name)
             .join(NoteTag, NoteTag.tag_id == Tag.id)
             .where(NoteTag.note_id == owner_id)
+        )
+    else:
+        stmt = (
+            select(Tag.name)
+            .join(FileTag, FileTag.tag_id == Tag.id)
+            .where(FileTag.file_id == owner_id)
         )
     return set((await db.scalars(stmt)).all())
 
@@ -258,6 +271,24 @@ async def _refresh_note_search_for_tag(db: AsyncSession, tag_id: str) -> None:
         (await db.scalars(select(NoteTag.note_id).where(NoteTag.tag_id == tag_id))).all()
     )
     await _refresh_note_search_for_notes(db, note_ids)
+
+
+async def _refresh_file_search_for_tag(db: AsyncSession, tag_id: str) -> None:
+    file_ids = list(
+        (await db.scalars(select(FileTag.file_id).where(FileTag.tag_id == tag_id))).all()
+    )
+    await _refresh_file_search_for_files(db, file_ids)
+
+
+async def _refresh_file_search_for_files(db: AsyncSession, file_ids: Iterable[str]) -> None:
+    file_ids = list(file_ids)
+    if not file_ids:
+        return
+    from ..files.service import _sync_file_search_for_file
+
+    files = list((await db.scalars(select(File).where(File.id.in_(file_ids)))).all())
+    for file in files:
+        await _sync_file_search_for_file(db, file)
 
 
 async def _refresh_note_search_for_notes(

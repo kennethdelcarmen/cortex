@@ -266,12 +266,12 @@ async def test_file_upload_download_immutable_duplicate_and_lifecycle(
     assert raw_with_inline_query.headers["content-disposition"].startswith("attachment;")
     assert raw_with_inline_query.headers["content-type"].startswith("application/octet-stream")
 
-    renamed = await client.patch(
+    invalid_update = await client.patch(
         f"/api/v1/files/{file_id}",
         headers=await csrf_headers(client),
         json={"name": "renamed.txt"},
     )
-    assert renamed.status_code == 405
+    assert invalid_update.status_code == 422
     assert (await client.get(f"/api/v1/files/{file_id}/content")).content == content
 
     duplicate = await upload(client, content, "copy.txt")
@@ -642,6 +642,100 @@ async def test_file_listing_uses_cursor_pagination_and_rejects_changed_filters(
     assert changed.json()["detail"]["code"] == "invalid_file_cursor"
 
 
+async def test_file_tags_search_and_status_filters(client: AsyncClient, processing_context) -> None:
+    await setup_owner(client)
+    work = await client.post(
+        "/api/v1/tags",
+        headers=await csrf_headers(client),
+        json={"name": " Work ", "color": "slate"},
+    )
+    personal = await client.post(
+        "/api/v1/tags",
+        headers=await csrf_headers(client),
+        json={"name": "personal", "color": "amber"},
+    )
+    assert work.status_code == 201
+    assert personal.status_code == 201
+    archived = await client.post(
+        "/api/v1/tags",
+        headers=await csrf_headers(client),
+        json={"name": "archived", "color": "plum"},
+    )
+    assert archived.status_code == 201
+    archived_tag = await client.delete(
+        f"/api/v1/tags/{archived.json()['id']}",
+        headers=await csrf_headers(client),
+    )
+    assert archived_tag.status_code == 200
+
+    first = await upload(client, b"lunar orchard context", "alpha.txt")
+    second = await upload(client, b"quiet river context", "beta.txt")
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    updated = await client.patch(
+        f"/api/v1/files/{first.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"tags": [" WORK ", "personal", "work"]},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["tags"] == ["personal", "work"]
+
+    unknown_tag = await client.patch(
+        f"/api/v1/files/{first.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"tags": ["missing"]},
+    )
+    assert unknown_tag.status_code == 422
+    assert unknown_tag.json()["detail"]["code"] == "unknown_tag"
+
+    archived_tag_update = await client.patch(
+        f"/api/v1/files/{first.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"tags": ["archived"]},
+    )
+    assert archived_tag_update.status_code == 422
+    assert archived_tag_update.json()["detail"]["code"] == "unknown_tag"
+
+    tag_filtered = await client.get(
+        "/api/v1/files",
+        params=[("tag", "work"), ("tag", "personal")],
+    )
+    assert [item["id"] for item in tag_filtered.json()["items"]] == [first.json()["id"]]
+
+    metadata_search = await client.get("/api/v1/files", params={"search": "ALPHA"})
+    assert [item["id"] for item in metadata_search.json()["items"]] == [first.json()["id"]]
+
+    ready_before_processing = await client.get(
+        "/api/v1/files",
+        params={"context_status": "ready"},
+    )
+    assert ready_before_processing.json()["items"] == []
+
+    processing_client, app = processing_context
+    await setup_owner(processing_client)
+    processed = await upload(processing_client, b"lunar orchard context", "alpha.txt")
+    assert await process_file_context_once(
+        app.state.storage,
+        app.state.file_storage,
+        app.state.settings,
+    )
+    content_search = await processing_client.get(
+        "/api/v1/files",
+        params={"search": "LUNAR ORCHARD", "context_status": "ready"},
+    )
+    assert [item["id"] for item in content_search.json()["items"]] == [processed.json()["id"]]
+
+    renamed_tag = await client.patch(
+        f"/api/v1/tags/{work.json()['id']}",
+        headers=await csrf_headers(client),
+        json={"name": "projects"},
+    )
+    assert renamed_tag.status_code == 200
+    renamed_search = await client.get("/api/v1/files", params={"search": "projects"})
+    assert [item["id"] for item in renamed_search.json()["items"]] == [first.json()["id"]]
+
+
 async def test_file_limit_leaves_no_partial_object(
     client: AsyncClient,
     tmp_path: Path,
@@ -722,6 +816,12 @@ async def test_mcp_file_metadata_tools_share_rest_persistence(tmp_path, monkeypa
         await setup_owner(client)
         created = await upload(client, b"agent bytes", "agent.txt")
         file_id = created.json()["id"]
+        tag = await client.post(
+            "/api/v1/tags",
+            headers=await csrf_headers(client),
+            json={"name": "agent", "color": "violet"},
+        )
+        assert tag.status_code == 201
         headers = await initialize_mcp(client)
 
         tools = await client.post(
@@ -750,6 +850,38 @@ async def test_mcp_file_metadata_tools_share_rest_persistence(tmp_path, monkeypa
         )
         assert listed.status_code == 200
         assert file_id in listed.text
+
+        tagged = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 31,
+                "method": "tools/call",
+                "params": {
+                    "name": "update_file",
+                    "arguments": {"file_id": file_id, "payload": {"tags": ["agent"]}},
+                },
+            },
+        )
+        assert tagged.status_code == 200
+        assert '"tags":["agent"]' in tagged.text
+
+        filtered = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 32,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_files",
+                    "arguments": {"tag": ["agent"], "search": "agent"},
+                },
+            },
+        )
+        assert filtered.status_code == 200
+        assert file_id in filtered.text
 
         context = await client.post(
             "/mcp/",

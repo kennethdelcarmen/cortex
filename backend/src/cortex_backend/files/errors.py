@@ -40,6 +40,14 @@ class InvalidFileQueryError(FileError):
     message = "The file list query is invalid."
 
 
+class InvalidFileTagError(FileError):
+    """The supplied file tag list is outside the supported bounds."""
+
+    status_code = 422
+    code = "invalid_file_tag"
+    message = "File tags must be non-empty and at most 64 characters."
+
+
 class InvalidFileNameError(FileError):
     """The supplied display filename is unsafe or empty."""
 

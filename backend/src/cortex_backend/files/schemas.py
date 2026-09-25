@@ -18,10 +18,17 @@ class FileResponse(BaseModel):
     name: str
     size_bytes: int = Field(ge=0)
     sha256: str
+    tags: list[str]
     context_status: FileContextStatus
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+
+
+class FileUpdateRequest(BaseModel):
+    """Validated partial update for one file's shared catalog tags."""
+
+    tags: list[str] = Field(max_length=20)
 
 
 class FileListResponse(BaseModel):

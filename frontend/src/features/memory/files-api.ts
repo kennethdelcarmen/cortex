@@ -6,6 +6,7 @@ export const storedFileSchema = z.object({
   name: z.string().min(1),
   size_bytes: z.number().int().nonnegative(),
   sha256: z.string().length(64),
+  tags: z.array(z.string()),
   context_status: z.enum(["pending", "processing", "ready", "unsupported", "failed"]),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
@@ -31,11 +32,30 @@ const storedFileListResponseSchema = z.object({
 export type StoredFile = z.infer<typeof storedFileSchema>;
 export type StoredFileListPage = z.infer<typeof storedFileListResponseSchema>;
 export type FileContext = z.infer<typeof fileContextSchema>;
+export type FileContextStatus = StoredFile["context_status"];
+
+export type FileListFilters = {
+  search?: string;
+  tags: string[];
+  contextStatuses: FileContextStatus[];
+};
 
 export const filesQueryKey = ["files"] as const;
 
-export function listFiles(cursor?: string) {
+export function listFiles(filters: FileListFilters, cursor?: string) {
   const params = new URLSearchParams({ limit: "50" });
+
+  if (filters.search) {
+    params.set("search", filters.search);
+  }
+
+  for (const tag of filters.tags) {
+    params.append("tag", tag);
+  }
+
+  for (const status of filters.contextStatuses) {
+    params.append("context_status", status);
+  }
 
   if (cursor) {
     params.set("cursor", cursor);
@@ -45,6 +65,17 @@ export function listFiles(cursor?: string) {
     `/api/v1/files?${params.toString()}`,
     {},
     storedFileListResponseSchema,
+  );
+}
+
+export function updateFileTags(fileId: string, tags: string[]) {
+  return apiFetch(
+    `/api/v1/files/${encodeURIComponent(fileId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ tags }),
+    },
+    storedFileSchema,
   );
 }
 

@@ -6,16 +6,20 @@ import base64
 import binascii
 import hashlib
 import json
+import re
+from collections import defaultdict
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, exists, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..storage import DatabaseStorage
+from ..tags.service import existing_tag_names, resolve_tag_names
+from ..tasks.models import Tag
 from .errors import (
     FileContentMissingError,
     FileContextNotReadyError,
@@ -27,9 +31,10 @@ from .errors import (
     InvalidFileCursorError,
     InvalidFileNameError,
     InvalidFileQueryError,
+    InvalidFileTagError,
 )
-from .models import FILE_CONTEXT_VERSION, File, FileArtifact, FileContextJob
-from .schemas import FileContextStatus, FilePreviewKind
+from .models import FILE_CONTEXT_VERSION, File, FileArtifact, FileContextJob, FileTag
+from .schemas import FileContextStatus, FilePreviewKind, FileUpdateRequest
 from .storage import FileBlobStore
 
 DEFAULT_FILE_LIMIT = 50
@@ -37,6 +42,9 @@ MAX_FILE_LIMIT = 100
 MAX_FILENAME_LENGTH = 255
 MAX_CONTEXT_CHARACTERS = 100_000
 DEFAULT_CONTEXT_CHARACTERS = 20_000
+MAX_SEARCH_LENGTH = 200
+MAX_FILE_TAGS = 20
+_FILE_CONTEXT_STATUSES = frozenset({"pending", "processing", "ready", "unsupported", "failed"})
 _RAW_TEXT_EXTENSIONS = frozenset(
     {"txt", "md", "markdown", "json", "csv", "tsv", "log", "yaml", "yml", "xml", "toml"}
 )
@@ -54,6 +62,7 @@ class FileRecord:
     storage_key: str
     size_bytes: int
     sha256: str
+    tags: list[str]
     context_status: FileContextStatus
     created_at: datetime
     updated_at: datetime
@@ -65,6 +74,9 @@ class FileListFilters:
     """Filters for a bounded newest-first file query."""
 
     include_deleted: bool = False
+    tags: tuple[str, ...] = ()
+    search: str | None = None
+    context_statuses: tuple[FileContextStatus, ...] = ()
     limit: int = DEFAULT_FILE_LIMIT
     cursor: str | None = None
 
@@ -110,7 +122,11 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _record(file: File, context_status: FileContextStatus = "pending") -> FileRecord:
+def _record(
+    file: File,
+    context_status: FileContextStatus = "pending",
+    tags: list[str] | None = None,
+) -> FileRecord:
     return FileRecord(
         id=file.id,
         user_id=file.user_id,
@@ -118,6 +134,7 @@ def _record(file: File, context_status: FileContextStatus = "pending") -> FileRe
         storage_key=file.storage_key,
         size_bytes=file.size_bytes,
         sha256=file.sha256,
+        tags=tags or [],
         context_status=context_status,
         created_at=_as_utc(file.created_at),
         updated_at=_as_utc(file.updated_at),
@@ -178,7 +195,12 @@ async def _artifact_for(
 
 def _filter_fingerprint(filters: FileListFilters) -> str:
     serialized = json.dumps(
-        {"include_deleted": filters.include_deleted},
+        {
+            "include_deleted": filters.include_deleted,
+            "tags": list(filters.tags),
+            "search": filters.search,
+            "context_statuses": list(filters.context_statuses),
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -214,7 +236,142 @@ def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime, str]:
 def _normalized_filters(filters: FileListFilters) -> FileListFilters:
     if not 1 <= filters.limit <= MAX_FILE_LIMIT:
         raise InvalidFileQueryError()
-    return filters
+    tags: dict[str, None] = {}
+    for value in filters.tags:
+        normalized = value.strip().casefold()
+        if not normalized or len(normalized) > 64:
+            raise InvalidFileQueryError()
+        tags[normalized] = None
+
+    search = None
+    if filters.search is not None:
+        search = " ".join(filters.search.strip().casefold().split())
+        if not search:
+            search = None
+        elif len(search) > MAX_SEARCH_LENGTH:
+            raise InvalidFileQueryError()
+
+    statuses = tuple(dict.fromkeys(filters.context_statuses))
+    if any(status not in _FILE_CONTEXT_STATUSES for status in statuses):
+        raise InvalidFileQueryError()
+
+    return FileListFilters(
+        include_deleted=filters.include_deleted,
+        tags=tuple(tags),
+        search=search,
+        context_statuses=statuses,
+        limit=filters.limit,
+        cursor=filters.cursor,
+    )
+
+
+def _fts_query(value: str | None) -> str | None:
+    if value is None:
+        return None
+    tokens = re.findall(r"\w+", value, flags=re.UNICODE)
+    if not tokens:
+        return None
+    return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+
+
+async def _tags_for_files(db: AsyncSession, file_ids: list[str]) -> dict[str, list[str]]:
+    if not file_ids:
+        return {}
+    result = await db.execute(
+        select(FileTag.file_id, Tag.name)
+        .join(Tag, Tag.id == FileTag.tag_id)
+        .where(FileTag.file_id.in_(file_ids))
+        .order_by(Tag.name.asc())
+    )
+    tags: dict[str, list[str]] = defaultdict(list)
+    for file_id, name in result.all():
+        tags[file_id].append(name)
+    return tags
+
+
+def _normalize_file_tag_names(values: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    normalized: dict[str, None] = {}
+    for value in values:
+        name = value.strip().casefold()
+        if not name or len(name) > 64:
+            raise InvalidFileTagError()
+        normalized[name] = None
+    if len(normalized) > MAX_FILE_TAGS:
+        raise InvalidFileTagError()
+    return tuple(normalized)
+
+
+async def _replace_file_tags(
+    db: AsyncSession,
+    file_id: str,
+    user_id: str,
+    tag_names: list[str] | tuple[str, ...] | None,
+) -> None:
+    normalized_names = _normalize_file_tag_names(tag_names)
+    retained_names = await existing_tag_names(db, FileTag, file_id)
+    resolved = await resolve_tag_names(
+        db,
+        user_id,
+        normalized_names,
+        retain_inactive=retained_names,
+    )
+    await db.execute(delete(FileTag).where(FileTag.file_id == file_id))
+    for name in normalized_names:
+        db.add(FileTag(file_id=file_id, tag_id=resolved[name].id))
+    await db.flush()
+
+
+async def _sync_file_search_for_file(
+    db: AsyncSession,
+    file: File,
+    *,
+    content: str | None = None,
+) -> None:
+    """Refresh one file's FTS row while preserving existing extracted content by default."""
+
+    if content is None:
+        content = await db.scalar(
+            text("SELECT content FROM files_fts WHERE file_id = :file_id"),
+            {"file_id": file.id},
+        )
+        if content is None:
+            content = ""
+    tags = (await _tags_for_files(db, [file.id])).get(file.id, [])
+    await db.execute(
+        text("DELETE FROM files_fts WHERE file_id = :file_id"),
+        {"file_id": file.id},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO files_fts (file_id, name, content, tags) "
+            "VALUES (:file_id, :name, :content, :tags)"
+        ),
+        {
+            "file_id": file.id,
+            "name": file.original_name,
+            "content": content,
+            "tags": " ".join(tags),
+        },
+    )
+
+
+async def _sync_file_search_for_source(
+    db: AsyncSession,
+    user_id: str,
+    source_sha256: str,
+    content: str,
+) -> None:
+    files = list(
+        (
+            await db.scalars(
+                select(File).where(File.user_id == user_id, File.sha256 == source_sha256)
+            )
+        ).all()
+    )
+    for file in files:
+        await _sync_file_search_for_file(db, file, content=content)
 
 
 async def _get_file_row(
@@ -311,7 +468,8 @@ async def create_file(
                             updated_at=now_job,
                         )
                     )
-                record = _record(file, "pending")
+                await _sync_file_search_for_file(db, file, content="")
+                record = _record(file, "pending", [])
     except Exception:
         try:
             await blob_store.delete(blob.storage_key)
@@ -326,7 +484,25 @@ async def get_file(storage: DatabaseStorage, user_id: str, file_id: str) -> File
 
     async with storage.session() as db:
         file = await _get_file_row(db, user_id, file_id)
-        return _record(file, await _context_status(db, user_id, file.sha256))
+        tags = (await _tags_for_files(db, [file.id])).get(file.id, [])
+        return _record(file, await _context_status(db, user_id, file.sha256), tags)
+
+
+async def update_file(
+    storage: DatabaseStorage,
+    user_id: str,
+    file_id: str,
+    payload: FileUpdateRequest,
+) -> FileRecord:
+    """Replace one active file's shared catalog tags."""
+
+    async with storage.session() as db:
+        async with db.begin():
+            file = await _get_file_row(db, user_id, file_id)
+            await _replace_file_tags(db, file.id, user_id, payload.tags)
+            await _sync_file_search_for_file(db, file)
+            tags = (await _tags_for_files(db, [file.id])).get(file.id, [])
+            return _record(file, await _context_status(db, user_id, file.sha256), tags)
 
 
 async def list_files(
@@ -342,6 +518,50 @@ async def list_files(
         statement = select(File).where(File.user_id == user_id)
         if not normalized.include_deleted:
             statement = statement.where(File.deleted_at.is_(None))
+        for tag_name in normalized.tags:
+            statement = statement.where(
+                exists(
+                    select(FileTag.file_id)
+                    .join(Tag, Tag.id == FileTag.tag_id)
+                    .where(
+                        FileTag.file_id == File.id,
+                        Tag.user_id == user_id,
+                        Tag.name == tag_name,
+                    )
+                )
+            )
+        if normalized.context_statuses:
+            status_values = set(normalized.context_statuses)
+            status_match = exists(
+                select(FileContextJob.id).where(
+                    FileContextJob.user_id == user_id,
+                    FileContextJob.source_sha256 == File.sha256,
+                    FileContextJob.extractor_version == FILE_CONTEXT_VERSION,
+                    FileContextJob.status.in_(status_values),
+                )
+            )
+            if "pending" in status_values:
+                missing_job = not_(
+                    exists(
+                        select(FileContextJob.id).where(
+                            FileContextJob.user_id == user_id,
+                            FileContextJob.source_sha256 == File.sha256,
+                            FileContextJob.extractor_version == FILE_CONTEXT_VERSION,
+                        )
+                    )
+                )
+                statement = statement.where(or_(status_match, missing_job))
+            else:
+                statement = statement.where(status_match)
+        fts_query = _fts_query(normalized.search)
+        if fts_query is not None:
+            statement = statement.where(
+                text(
+                    "EXISTS (SELECT 1 FROM files_fts "
+                    "WHERE files_fts.file_id = files.id "
+                    "AND files_fts MATCH :fts_query)"
+                ).bindparams(fts_query=fts_query)
+            )
         if normalized.cursor:
             cursor_created_at, cursor_id = _decode_cursor(normalized.cursor, fingerprint)
             statement = statement.where(
@@ -359,6 +579,7 @@ async def list_files(
             _encode_cursor(page_files[-1], fingerprint) if len(files) > normalized.limit else None
         )
         status_by_hash: dict[str, FileContextStatus] = {}
+        tags_by_file = await _tags_for_files(db, [file.id for file in page_files])
         if page_files:
             jobs = await db.scalars(
                 select(FileContextJob).where(
@@ -372,7 +593,12 @@ async def list_files(
             }
         return FilePage(
             items=[
-                _record(file, status_by_hash.get(file.sha256, "pending")) for file in page_files
+                _record(
+                    file,
+                    status_by_hash.get(file.sha256, "pending"),
+                    tags_by_file.get(file.id, []),
+                )
+                for file in page_files
             ],
             next_cursor=next_cursor,
         )
@@ -404,7 +630,8 @@ async def restore_file(
                 file.deleted_at = None
                 file.updated_at = _utc_now()
                 await db.flush()
-            return _record(file, await _context_status(db, user_id, file.sha256))
+            tags = (await _tags_for_files(db, [file.id])).get(file.id, [])
+            return _record(file, await _context_status(db, user_id, file.sha256), tags)
 
 
 async def permanently_delete_file(
@@ -462,6 +689,11 @@ async def permanently_delete_file(
                         FileContextJob.source_sha256 == file.sha256,
                     )
                 )
+            await db.execute(
+                text("DELETE FROM files_fts WHERE file_id = :file_id"),
+                {"file_id": file.id},
+            )
+            await db.execute(delete(FileTag).where(FileTag.file_id == file.id))
             await db.delete(file)
             await db.flush()
 
@@ -635,4 +867,5 @@ async def retry_file_context(
             job.last_error = None
             job.updated_at = _utc_now()
             await db.flush()
-            return _record(file, "pending")
+            tags = (await _tags_for_files(db, [file.id])).get(file.id, [])
+            return _record(file, "pending", tags)

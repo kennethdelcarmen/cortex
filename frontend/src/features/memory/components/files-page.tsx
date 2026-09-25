@@ -1,18 +1,22 @@
 "use client";
 
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Download,
   FileText,
   LoaderCircle,
+  Search,
+  SlidersHorizontal,
   Trash2,
   Upload,
 } from "lucide-react";
 import { useCallback, useId, useMemo, useRef, useState, type DragEvent } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
+import { TagBadge } from "@/components/tag-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -22,18 +26,36 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { useCurrentUser } from "@/features/auth/hooks";
+import { createTag, getTags, tagsQueryKey, type Tag, type TagColor } from "@/features/tags/api";
 import {
   deleteFile,
   downloadFile,
   filesQueryKey,
   listFiles,
+  updateFileTags,
   uploadFile,
+  type FileContextStatus,
+  type FileListFilters,
   type StoredFile,
   type StoredFileListPage,
 } from "../files-api";
+import {
+  FILE_CONTEXT_STATUSES,
+  clearFileUrlState,
+  parseFileUrlState,
+} from "../file-filters";
 import { ConfirmDialog } from "./confirm-dialog";
 import { FilePreviewDrawer } from "./file-preview";
 import {
@@ -120,7 +142,123 @@ function contextStatusLabel(status: StoredFile["context_status"]) {
   }
 }
 
+function contextStatusFilterLabel(status: FileContextStatus) {
+  switch (status) {
+    case "ready":
+      return "Ready";
+    case "processing":
+      return "Processing";
+    case "unsupported":
+      return "Unsupported";
+    case "failed":
+      return "Failed";
+    default:
+      return "Pending";
+  }
+}
+
+function FileFilterPopover({
+  tags,
+  tagsLoading,
+  tagsError,
+  selectedTags,
+  selectedStatuses,
+  onToggleTag,
+  onToggleStatus,
+  onClear,
+}: {
+  tags: Tag[];
+  tagsLoading: boolean;
+  tagsError: boolean;
+  selectedTags: string[];
+  selectedStatuses: FileContextStatus[];
+  onToggleTag: (tag: string) => void;
+  onToggleStatus: (status: FileContextStatus) => void;
+  onClear: () => void;
+}) {
+  const selectedCount = selectedTags.length + selectedStatuses.length;
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button type="button" variant="outline" className="h-10 shrink-0 gap-2">
+            <SlidersHorizontal aria-hidden="true" />
+            Filters
+            {selectedCount ? (
+              <span className="flex size-5 items-center justify-center rounded-full bg-primary text-[0.68rem] text-primary-foreground">
+                {selectedCount}
+              </span>
+            ) : null}
+          </Button>
+        }
+      />
+      <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] p-4">
+        <PopoverHeader>
+          <PopoverTitle>Filter files</PopoverTitle>
+          <PopoverDescription>Combine tags and context status to narrow the library.</PopoverDescription>
+        </PopoverHeader>
+        <div className="mt-4 space-y-4">
+          <fieldset>
+            <legend className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Tags
+            </legend>
+            <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+              {tagsLoading ? (
+                <p className="px-2 py-2 text-sm text-muted-foreground" role="status">Loading tags…</p>
+              ) : tagsError ? (
+                <p className="px-2 py-2 text-sm text-destructive" role="alert">Tags are unavailable right now.</p>
+              ) : tags.length ? tags.map((tag) => (
+                <label
+                  key={tag.id}
+                  className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted/60"
+                >
+                  <Checkbox
+                    checked={selectedTags.includes(tag.name)}
+                    onCheckedChange={() => onToggleTag(tag.name)}
+                    aria-label={`Filter by ${tag.name}`}
+                  />
+                  <TagBadge name={tag.name} color={tag.color} active={tag.active} />
+                </label>
+              )) : (
+                <p className="px-2 py-2 text-sm text-muted-foreground">No catalog tags yet.</p>
+              )}
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Context status
+            </legend>
+            <div className="mt-2 grid grid-cols-2 gap-1">
+              {FILE_CONTEXT_STATUSES.map((status) => (
+                <label
+                  key={status}
+                  className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted/60"
+                >
+                  <Checkbox
+                    checked={selectedStatuses.includes(status)}
+                    onCheckedChange={() => onToggleStatus(status)}
+                    aria-label={`Filter by ${contextStatusFilterLabel(status)}`}
+                  />
+                  <span>{contextStatusFilterLabel(status)}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {selectedCount ? (
+            <Button type="button" variant="ghost" size="sm" className="w-full" onClick={onClear}>
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 type UploadFailure = { file: File; message: string; sessionError: boolean };
+
+const EMPTY_TAGS: Tag[] = [];
 
 function describeUploadFailures(failures: UploadFailure[]) {
   const names = failures.map(({ file }) => file.name);
@@ -230,12 +368,14 @@ function UploadDialog({
 
 function FileRow({
   file,
+  tagByName,
   downloading,
   onOpen,
   onDownload,
   onDelete,
 }: {
   file: StoredFile;
+  tagByName: Map<string, Tag>;
   downloading: boolean;
   onOpen: () => void;
   onDownload: () => void;
@@ -260,6 +400,21 @@ function FileRow({
             <span aria-hidden="true">·</span>
             <span>Added {formatDate(file.created_at)}</span>
           </span>
+          {file.tags.length ? (
+            <span className="mt-2 flex flex-wrap gap-1.5" aria-label="File tags">
+              {file.tags.slice(0, 3).map((tagName) => (
+                <TagBadge
+                  key={tagName}
+                  name={tagName}
+                  color={tagByName.get(tagName)?.color}
+                  active={tagByName.get(tagName)?.active ?? true}
+                />
+              ))}
+              {file.tags.length > 3 ? (
+                <span className="self-center text-xs text-muted-foreground">+{file.tags.length - 3}</span>
+              ) : null}
+            </span>
+          ) : null}
         </span>
       </button>
       <div className="flex shrink-0 items-center gap-1 self-end sm:self-auto">
@@ -284,7 +439,10 @@ function FileRow({
 function FilesWorkspace() {
   const queryClient = useQueryClient();
   const feedback = useFeedback();
+  const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const searchParamsValue = searchParams.toString();
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const uploadingRef = useRef(false);
@@ -293,14 +451,60 @@ function FilesWorkspace() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string>();
 
+  const urlState = useMemo(
+    () => parseFileUrlState(new URLSearchParams(searchParamsValue)),
+    [searchParamsValue],
+  );
+  const filters = useMemo<FileListFilters>(
+    () => ({
+      search: urlState.search || undefined,
+      tags: urlState.tags,
+      contextStatuses: urlState.contextStatuses,
+    }),
+    [urlState.contextStatuses, urlState.search, urlState.tags],
+  );
+  const listQueryKey = useMemo(
+    () => [...filesQueryKey, "list", filters] as const,
+    [filters],
+  );
+  const tagCatalogQuery = useQuery({
+    queryKey: tagsQueryKey,
+    queryFn: () => getTags(true),
+  });
+  const tagCatalog = tagCatalogQuery.data?.items ?? EMPTY_TAGS;
+  const tagByName = useMemo(
+    () => new Map(tagCatalog.map((tag) => [tag.name, tag])),
+    [tagCatalog],
+  );
+  const filterTags = useMemo(() => {
+    const selectedCatalogTags = urlState.tags
+      .map((name) => tagByName.get(name))
+      .filter((tag): tag is Tag => Boolean(tag));
+    const activeTags = tagCatalog.filter((tag) => tag.active);
+    return [
+      ...activeTags,
+      ...selectedCatalogTags.filter((tag) => !activeTags.some((active) => active.id === tag.id)),
+    ];
+  }, [tagCatalog, tagByName, urlState.tags]);
+
   const filesQuery = useInfiniteQuery({
-    queryKey: filesQueryKey,
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) => listFiles(pageParam),
+    queryKey: listQueryKey,
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => listFiles(filters, pageParam),
     initialPageParam: "",
     getNextPageParam: (lastPage: StoredFileListPage) => lastPage.next_cursor ?? undefined,
     refetchInterval: 5000,
   });
   const files = useMemo(() => filesQuery.data?.pages.flatMap((page) => page.items) ?? [], [filesQuery.data]);
+
+  const updateFileUrl = useCallback(
+    (update: (params: URLSearchParams) => void) => {
+      const params = new URLSearchParams(searchParamsValue);
+      update(params);
+      const queryString = params.toString();
+      router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParamsValue],
+  );
 
   const { mutateAsync: uploadFileAsync } = useMutation({ mutationFn: uploadFile });
   const deleteMutation = useMutation({
@@ -317,6 +521,20 @@ function FilesWorkspace() {
         return;
       }
       feedback.error({ title: "File could not be removed.", description: describeFileError(error) });
+    },
+  });
+  const { mutateAsync: updateFileTagsAsync } = useMutation({
+    mutationFn: ({ fileId, tags }: { fileId: string; tags: string[] }) => updateFileTags(fileId, tags),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: filesQueryKey });
+    },
+  });
+  const createTagMutation = useMutation({
+    mutationFn: createTag,
+    onSuccess: (tag) => {
+      queryClient.setQueryData(tagsQueryKey, (current: { items: Tag[] } | undefined) => ({
+        items: [...(current?.items ?? []).filter((item) => item.id !== tag.id), tag],
+      }));
     },
   });
 
@@ -378,6 +596,36 @@ function FilesWorkspace() {
     }
   }
 
+  const handleFileTagsChange = useCallback(
+    (fileId: string, tags: string[]) =>
+      updateFileTagsAsync({ fileId, tags }).then(() => undefined),
+    [updateFileTagsAsync],
+  );
+
+  function toggleTag(tag: string) {
+    updateFileUrl((params) => {
+      const nextTags = urlState.tags.includes(tag)
+        ? urlState.tags.filter((value) => value !== tag)
+        : [...urlState.tags, tag];
+      params.delete("tag");
+      nextTags.forEach((value) => params.append("tag", value));
+    });
+  }
+
+  function toggleStatus(status: FileContextStatus) {
+    updateFileUrl((params) => {
+      const nextStatuses = urlState.contextStatuses.includes(status)
+        ? urlState.contextStatuses.filter((value) => value !== status)
+        : [...urlState.contextStatuses, status];
+      params.delete("context_status");
+      nextStatuses.forEach((value) => params.append("context_status", value));
+    });
+  }
+
+  function clearFilters() {
+    updateFileUrl(clearFileUrlState);
+  }
+
   const listError = filesQuery.error;
   const listSessionError = isSessionError(listError) ? describeFileError(listError) : undefined;
   const activeSessionError = sessionError ?? listSessionError;
@@ -400,6 +648,40 @@ function FilesWorkspace() {
             {uploading ? "Uploading…" : "Add files"}
           </Button>
         </div>
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              aria-label="Search files"
+              value={urlState.search}
+              onChange={(event) => {
+                const value = event.target.value.slice(0, 200);
+                updateFileUrl((params) => {
+                  if (value.trim()) {
+                    params.set("q", value);
+                  } else {
+                    params.delete("q");
+                  }
+                });
+              }}
+              placeholder="Search filenames, tags, or extracted context"
+              className="h-10 pl-9"
+            />
+          </div>
+          <FileFilterPopover
+            tags={filterTags}
+            tagsLoading={tagCatalogQuery.isPending}
+            tagsError={tagCatalogQuery.isError}
+            selectedTags={urlState.tags}
+            selectedStatuses={urlState.contextStatuses}
+            onToggleTag={toggleTag}
+            onToggleStatus={toggleStatus}
+            onClear={clearFilters}
+          />
+        </div>
       </header>
 
       <UploadDialog open={uploadOpen} uploading={uploading} onFiles={handleFiles} onOpenChange={setUploadOpen} />
@@ -408,7 +690,7 @@ function FilesWorkspace() {
         <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3 sm:px-5">
           <div>
             <p className="font-mono text-[0.64rem] uppercase tracking-[0.16em] text-muted-foreground">Stored locally</p>
-            <h2 id="files-list-title" className="mt-1 text-sm font-medium">Recent sources</h2>
+            <h2 id="files-list-title" className="mt-1 text-sm font-medium">{urlState.search || urlState.tags.length || urlState.contextStatuses.length ? "Matching sources" : "Recent sources"}</h2>
           </div>
           <span className="font-mono text-[0.64rem] uppercase tracking-[0.1em] text-muted-foreground">Context status</span>
         </div>
@@ -416,8 +698,13 @@ function FilesWorkspace() {
         {filesQuery.isSuccess && !files.length ? (
           <div className="px-5 py-14 text-center">
             <FileText aria-hidden="true" className="mx-auto size-7 text-primary-strong" />
-            <h3 className="mt-4 text-base font-medium">Your source library is empty.</h3>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">Add a source file or reference to make it available to Cortex’s context pipeline.</p>
+            <h3 className="mt-4 text-base font-medium">{urlState.search || urlState.tags.length || urlState.contextStatuses.length ? "No files match this view." : "Your source library is empty."}</h3>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">{urlState.search || urlState.tags.length || urlState.contextStatuses.length ? "Clear a filter or try a different search phrase." : "Add a source file or reference to make it available to Cortex’s context pipeline."}</p>
+            {urlState.search || urlState.tags.length || urlState.contextStatuses.length ? (
+              <Button type="button" variant="outline" size="sm" className="mt-5" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {files.length ? (
@@ -427,6 +714,7 @@ function FilesWorkspace() {
                 <FileRow
                   key={file.id}
                   file={file}
+                  tagByName={tagByName}
                   downloading={downloadingId === file.id}
                   onOpen={() => setDrawerFile(file)}
                   onDownload={() => void handleDownload(file)}
@@ -453,6 +741,7 @@ function FilesWorkspace() {
       </section>
 
       <FilePreviewDrawer
+        key={drawerFile?.id ?? "no-file"}
         file={drawerFile}
         open={Boolean(drawerFile)}
         downloading={drawerFile ? downloadingId === drawerFile.id : false}
@@ -467,6 +756,9 @@ function FilesWorkspace() {
           if (drawerFile) setDeleteTarget(drawerFile);
         }}
         onSessionError={handleSessionError}
+        availableTags={tagCatalog}
+        onCreateTag={(payload: { name: string; color: TagColor }) => createTagMutation.mutateAsync(payload)}
+        onTagsChange={(tags) => drawerFile ? handleFileTagsChange(drawerFile.id, tags) : Promise.resolve()}
       />
 
       <ConfirmDialog

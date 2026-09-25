@@ -1,8 +1,8 @@
 import type { LucideIcon } from "lucide-react";
-import { BookOpen, Home, ListTodo, Settings2, WalletCards } from "lucide-react";
+import { BookOpen, Home, ListTodo, Settings2, Trash2, WalletCards } from "lucide-react";
 
 export type WorkspaceModule = "focus" | "memory" | "money";
-export type WorkspaceSection = "home" | WorkspaceModule | "settings";
+export type WorkspaceSection = "home" | WorkspaceModule | "trash" | "settings";
 
 export type WorkspaceNavigationItem = {
   key: WorkspaceSection;
@@ -64,6 +64,13 @@ export const workspaceNavigation: WorkspaceNavigationItem[] = [
     icon: Home,
   },
   ...Object.values(moduleDefinitions),
+  {
+    key: "trash",
+    label: "Trash",
+    href: "/trash",
+    description: "Deleted and archived records",
+    icon: Trash2,
+  },
   {
     key: "settings",
     label: "Settings",

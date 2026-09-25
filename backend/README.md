@@ -73,7 +73,8 @@ jobs, and artifact manifests, while the filesystem contains raw and derived
 bytes. File migrations `0011_file_context_pipeline` and
 `0012_normalize_file_context_timestamps` are forward-only for normal
 operations; the first migration's downgrade is backup-only because the removed
-upload MIME metadata cannot be reconstructed.
+upload MIME metadata cannot be reconstructed. Migration `0013_file_tags_search`
+adds owner-scoped file tags and the local metadata/content search index.
 
 File processing runs in a restart-safe local worker. Configure
 `CORTEX_FILE_PROCESSING_ENABLED`, `CORTEX_FILE_PROCESSING_POLL_SECONDS`,
@@ -195,19 +196,21 @@ The initial service exposes:
   `amber`, `slate`, `plum`, `violet`, `sand`, or `destructive`, and can be
   archived and restored without removing historical note or task memberships.
 - `/api/v1/tasks` for authenticated task CRUD, filtering, and cursor pagination.
-- `/api/v1/files` for authenticated multipart uploads, immutable source
-  metadata listing, attachment downloads, bounded processing status/context,
-  authenticated derived preview streams, soft deletion, restoration, and
-  processing retries. Raw `/content` downloads always use attachment
-  semantics. The backend owns Office conversion, PDF text extraction, and
-  image OCR; browser-side file parsers are not part of the storage contract.
+- `/api/v1/files` for authenticated multipart uploads, owner-scoped shared-tag
+  assignment, metadata/content search, repeated tag and context-status
+  filters, immutable source metadata listing, attachment downloads, bounded
+  processing status/context, authenticated derived preview streams, soft
+  deletion, restoration, and processing retries. Raw `/content` downloads
+  always use attachment semantics. The backend owns Office conversion, PDF
+  text extraction, and image OCR; browser-side file parsers are not part of the
+  storage contract.
 - `/api/v1/recovery` for the unified authenticated recovery feed across deleted
   tasks, notes, files, and archived tags. `POST /restore` and
   `POST /permanent-delete` accept one or more typed `{type, id}` references and
   return independent per-item outcomes. Permanent deletion is explicit and
   removes file blobs and unreferenced derived artifacts when applicable.
 - `/mcp` as an authenticated Streamable HTTP MCP transport exposing the same
-  task, note, activity-log, recovery, and immutable file-metadata/context
+  task, note, activity-log, recovery, file-tag, and file-metadata/context
   operations to agents. MCP clients
   may send either an existing session token or the configured static MCP key as
   a bearer token in the `Authorization` header. Static keys are accepted only

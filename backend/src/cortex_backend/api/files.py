@@ -21,7 +21,13 @@ from fastapi.responses import StreamingResponse
 from ..auth.service import CurrentAuth
 from ..config import Settings
 from ..files.errors import FileError
-from ..files.schemas import FileContextResponse, FileListResponse, FileResponse
+from ..files.schemas import (
+    FileContextResponse,
+    FileContextStatus,
+    FileListResponse,
+    FileResponse,
+    FileUpdateRequest,
+)
 from ..files.service import (
     FileContextRecord,
     FileListFilters,
@@ -35,9 +41,11 @@ from ..files.service import (
     retry_file_context,
     stream_file,
     stream_preview,
+    update_file,
 )
 from ..files.storage import FileBlobStore
 from ..storage import DatabaseStorage
+from ..tags.errors import TagError
 from .dependencies import (
     get_current_auth,
     get_database_storage,
@@ -49,10 +57,14 @@ from .dependencies import (
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
 
-def _raise_http(error: FileError) -> None:
+def _raise_http(error: FileError | TagError) -> None:
+    detail: dict[str, object] = {"code": error.code, "message": error.message}
+    for attribute in ("unknown_tags", "allowed_tags"):
+        if hasattr(error, attribute):
+            detail[attribute] = getattr(error, attribute)
     raise HTTPException(
         status_code=error.status_code,
-        detail={"code": error.code, "message": error.message},
+        detail=detail,
     ) from error
 
 
@@ -62,6 +74,7 @@ def _response(record: FileRecord) -> FileResponse:
         name=record.name,
         size_bytes=record.size_bytes,
         sha256=record.sha256,
+        tags=record.tags,
         context_status=record.context_status,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -134,6 +147,12 @@ async def list_files_route(
     storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
     auth: Annotated[CurrentAuth, Depends(get_current_auth)],
     include_deleted: bool = False,
+    tags: Annotated[list[str] | None, Query(alias="tag")] = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    context_statuses: Annotated[
+        list[FileContextStatus] | None,
+        Query(alias="context_status"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
 ) -> FileListResponse:
@@ -143,9 +162,16 @@ async def list_files_route(
         page = await list_files(
             storage,
             auth.user.id,
-            FileListFilters(include_deleted=include_deleted, limit=limit, cursor=cursor),
+            FileListFilters(
+                include_deleted=include_deleted,
+                tags=tuple(tags or ()),
+                search=search,
+                context_statuses=tuple(context_statuses or ()),
+                limit=limit,
+                cursor=cursor,
+            ),
         )
-    except FileError as exc:
+    except (FileError, TagError) as exc:
         _raise_http(exc)
     return FileListResponse(
         items=[_response(record) for record in page.items],
@@ -236,6 +262,22 @@ async def get_file_route(
     try:
         record = await get_file(storage, auth.user.id, file_id)
     except FileError as exc:
+        _raise_http(exc)
+    return _response(record)
+
+
+@router.patch("/{file_id}", response_model=FileResponse)
+async def update_file_route(
+    file_id: str,
+    payload: FileUpdateRequest,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> FileResponse:
+    """Replace one active file's shared catalog tags."""
+
+    try:
+        record = await update_file(storage, auth.user.id, file_id, payload)
+    except (FileError, TagError) as exc:
         _raise_http(exc)
     return _response(record)
 

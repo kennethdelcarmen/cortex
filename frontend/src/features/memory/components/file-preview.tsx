@@ -19,6 +19,8 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { ApiError } from "@/lib/api/client";
+import { TagPicker } from "@/components/tag-picker";
+import type { Tag, TagColor } from "@/features/tags/api";
 import {
   downloadPreview,
   getFileContext,
@@ -206,6 +208,9 @@ export function FilePreviewDrawer({
   onDownload,
   onDelete,
   onSessionError,
+  availableTags,
+  onCreateTag,
+  onTagsChange,
 }: {
   file: StoredFile | null;
   open: boolean;
@@ -215,11 +220,17 @@ export function FilePreviewDrawer({
   onDownload: () => void;
   onDelete: () => void;
   onSessionError: () => void;
+  availableTags: Tag[];
+  onCreateTag: (payload: { name: string; color: TagColor }) => Promise<Tag>;
+  onTagsChange: (tags: string[]) => Promise<void>;
 }) {
   const [context, setContext] = useState<FileContext | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fileTags, setFileTags] = useState<string[]>(() => file?.tags ?? []);
+  const [tagSaving, setTagSaving] = useState(false);
+  const [tagSaveError, setTagSaveError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const fileId = file?.id;
 
@@ -311,6 +322,21 @@ export function FilePreviewDrawer({
     context?.status === "failed" ||
     (context?.status === "ready" && isOfficeFile(context.name) && context.preview_kind !== "pdf");
 
+  async function saveTags(nextTags: string[]) {
+    const previousTags = fileTags;
+    setFileTags(nextTags);
+    setTagSaving(true);
+    setTagSaveError(null);
+    try {
+      await onTagsChange(nextTags);
+    } catch (nextError) {
+      setFileTags(previousTags);
+      setTagSaveError(nextError instanceof Error ? nextError.message : "Tags could not be saved.");
+    } finally {
+      setTagSaving(false);
+    }
+  }
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
       <DrawerContent
@@ -322,6 +348,18 @@ export function FilePreviewDrawer({
             <DrawerDescription>
               {file ? "PDF preview and extracted context." : ""}
             </DrawerDescription>
+            <div className="mt-3 min-w-0">
+              <TagPicker
+                id="file-tags"
+                presentation="popover"
+                tags={availableTags}
+                value={fileTags}
+                onChange={(nextTags) => void saveTags(nextTags)}
+                onCreateTag={onCreateTag}
+                disabled={tagSaving || !file}
+              />
+              {tagSaveError ? <p className="mt-2 text-xs text-destructive" role="alert">{tagSaveError}</p> : null}
+            </div>
           </DrawerHeader>
           <div className="overflow-auto px-5 py-5 sm:px-7">
             {loading && !context ? (

@@ -50,6 +50,24 @@ class File(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class FileTag(Base):
+    """Many-to-many membership between files and the shared owner-scoped tag catalog."""
+
+    __tablename__ = "file_tags"
+    __table_args__ = (Index("ix_file_tags_tag_id", "tag_id"),)
+
+    file_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("files.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tag_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tags.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
 class FileContextJob(Base):
     """Durable owner-scoped processing state shared by duplicate source bytes."""
 

@@ -145,8 +145,13 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         }
         note_tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(note_tags)")}
         assert note_tag_columns == {"note_id", "tag_id"}
+        file_tag_columns = {row[1] for row in connection.execute("PRAGMA table_info(file_tags)")}
+        assert file_tag_columns == {"file_id", "tag_id"}
         assert connection.execute(
             "SELECT type FROM sqlite_master WHERE name = 'notes_fts'"
+        ).fetchone() == ("table",)
+        assert connection.execute(
+            "SELECT type FROM sqlite_master WHERE name = 'files_fts'"
         ).fetchone() == ("table",)
         activity_log_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(activity_logs)")
@@ -234,6 +239,7 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_notes_owner_deleted_journal",
             "ix_note_tags_tag_id",
             "ix_files_owner_deleted_created",
+            "ix_file_tags_tag_id",
             "ix_file_context_jobs_claim",
             "ix_file_artifacts_owner_hash",
         } <= indexes
@@ -249,8 +255,80 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0012_normalize_file_context_timestamps",
+            "0013_file_tags_search",
         )
+
+
+def test_file_search_migration_requeues_ready_context_and_backfills_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0012_normalize_file_context_timestamps")
+    user_id = "00000000-0000-0000-0000-000000000001"
+    file_id = "00000000-0000-0000-0000-000000000010"
+    source_hash = "a" * 64
+    timestamp = "2027-01-01 00:00:00"
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, "owner@example.com", "not-used", 1, 1, timestamp, timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO files "
+            "(id, user_id, original_name, storage_key, size_bytes, sha256, created_at, "
+            "updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                file_id,
+                user_id,
+                "project-notes.txt",
+                "a" * 32 + ".blob",
+                4,
+                source_hash,
+                timestamp,
+                timestamp,
+                None,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO file_context_jobs "
+            "(id, user_id, source_sha256, status, attempts, available_at, lease_expires_at, "
+            "last_error, extractor_version, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "00000000-0000-0000-0000-000000000020",
+                user_id,
+                source_hash,
+                "ready",
+                3,
+                timestamp,
+                timestamp,
+                "old_error",
+                "v1",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT status, attempts, lease_expires_at, last_error "
+            "FROM file_context_jobs WHERE id = ?",
+            ("00000000-0000-0000-0000-000000000020",),
+        ).fetchone()[:2] == ("pending", 0)
+        assert connection.execute(
+            "SELECT lease_expires_at, last_error FROM file_context_jobs WHERE id = ?",
+            ("00000000-0000-0000-0000-000000000020",),
+        ).fetchone() == (None, None)
+        assert connection.execute(
+            "SELECT file_id, name, content, tags FROM files_fts"
+        ).fetchone() == (file_id, "project-notes.txt", "", "")
 
 
 def test_file_context_migration_backfills_one_pending_job_per_source_hash(

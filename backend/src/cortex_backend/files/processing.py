@@ -28,6 +28,7 @@ from .service import (
     _OFFICE_EXTENSIONS,
     _RAW_TEXT_EXTENSIONS,
     _extension,
+    _sync_file_search_for_source,
     _utc_now,
 )
 from .storage import FileBlobStore
@@ -134,6 +135,8 @@ def _resolve_executable(command: str, fallback_paths: tuple[str, ...]) -> str | 
         return resolved
     for candidate in fallback_paths:
         path = Path(candidate)
+        if path.name != configured.name:
+            continue
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
     return None
@@ -617,7 +620,13 @@ async def _finish_job(
                 stored_job.lease_expires_at = None
                 stored_job.last_error = None
                 stored_job.updated_at = now
-                await db.flush()
+            await db.flush()
+            await _sync_file_search_for_source(
+                db,
+                job.user_id,
+                job.source_sha256,
+                extracted.text.decode("utf-8", errors="replace"),
+            )
 
 
 async def _mark_job(
