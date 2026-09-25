@@ -21,6 +21,7 @@ from .errors import (
     FileContextNotReadyError,
     FileError,
     FileNotFoundError,
+    FilePreviewUnavailableError,
     FileStorageUnavailableError,
     InvalidFileCursorError,
     InvalidFileNameError,
@@ -474,7 +475,7 @@ async def get_file_context(
         elif status != "ready":
             preview_kind = None
         elif extension in _OFFICE_EXTENSIONS:
-            preview_kind = "pdf" if pdf_artifact is not None else "text" if text_artifact else None
+            preview_kind = "pdf" if pdf_artifact is not None else None
         else:
             preview_kind = preview_kind_for_name(file.original_name)
 
@@ -525,10 +526,8 @@ async def stream_preview(
             if extension in _OFFICE_EXTENSIONS:
                 artifact = await _artifact_for(db, user_id, file.sha256, "pdf")
                 if artifact is None:
-                    artifact = await _artifact_for(db, user_id, file.sha256, "text")
-                    artifact_kind = "text" if artifact is not None else None
-                else:
-                    artifact_kind = "pdf"
+                    raise FilePreviewUnavailableError()
+                artifact_kind = "pdf"
             elif extension in _RAW_TEXT_EXTENSIONS:
                 artifact = await _artifact_for(db, user_id, file.sha256, "text")
                 artifact_kind = "text"

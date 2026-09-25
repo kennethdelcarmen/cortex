@@ -105,6 +105,41 @@ function WorkspaceNavLink({
   );
 }
 
+function MemorySubNavigation() {
+  const pathname = usePathname();
+
+  return (
+    <nav
+      aria-label="Memory views"
+      className="ml-4 mt-1 space-y-0.5 border-l border-border/80 pl-3"
+    >
+      {[
+        { href: "/memory", label: "Journal & Notes" },
+        { href: "/memory/files", label: "Files" },
+      ].map((view) => {
+        const active = pathname === view.href;
+
+        return (
+          <Link
+            key={view.href}
+            href={view.href}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "rounded-md text-sm outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
+              "block px-3 py-1.5 text-xs",
+              active
+                ? "bg-chart-4/10 font-medium text-foreground"
+                : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+            )}
+          >
+            {view.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 function WorkspaceSidebar({
   email,
   isSigningOut,
@@ -143,6 +178,7 @@ function WorkspaceSidebar({
             {workspaceNavigation.map((item) => (
               <div key={item.key}>
                 <WorkspaceNavLink item={item} />
+                {item.key === "memory" ? <MemorySubNavigation /> : null}
                 {item.key === "focus" ? sidebarContent : null}
               </div>
             ))}

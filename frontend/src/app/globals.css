@@ -399,6 +399,16 @@
   }
 }
 
+.file-preview-drawer[data-swipe-axis="x"] {
+  --drawer-content-width: calc(100vw - 1rem);
+}
+
+@media (min-width: 640px) {
+  .file-preview-drawer[data-swipe-axis="x"] {
+    --drawer-content-width: 50vw;
+  }
+}
+
 .memory-editor__toolbar {
   position: sticky;
   top: 0.75rem;

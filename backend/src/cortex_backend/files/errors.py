@@ -72,3 +72,11 @@ class FileContextNotReadyError(FileError):
     status_code = 409
     code = "file_context_not_ready"
     message = "File context is not ready yet."
+
+
+class FilePreviewUnavailableError(FileError):
+    """The file context exists but no visual preview artifact is available."""
+
+    status_code = 409
+    code = "file_preview_unavailable"
+    message = "A PDF preview is not available for this Office file."

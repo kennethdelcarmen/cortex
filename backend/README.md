@@ -81,10 +81,12 @@ File processing runs in a restart-safe local worker. Configure
 and `CORTEX_FILE_PROCESSING_TIMEOUT_SECONDS` for worker behavior. Office
 sources use a headless LibreOffice-compatible `soffice` command, selected with
 `CORTEX_FILE_CONVERTER_COMMAND`; archive-based Office formats retain a text
-fallback when PDF conversion is unavailable. Image OCR uses Tesseract, selected
-with `CORTEX_FILE_OCR_COMMAND`, and `CORTEX_FILE_OCR_LANGUAGE` (default `eng`)
-selects the installed language data. The worker searches the process PATH and
-common macOS/Linux install locations, but it does not install system tools.
+fallback for context extraction when PDF conversion is unavailable, but the file
+drawer does not render that fallback as an Office preview. Image OCR uses
+Tesseract, selected with `CORTEX_FILE_OCR_COMMAND`, and
+`CORTEX_FILE_OCR_LANGUAGE` (default `eng`) selects the installed language data.
+The worker searches the process PATH and common macOS/Linux install locations,
+but it does not install system tools.
 Install and verify the tools before enabling production processing, for example:
 
 ```bash

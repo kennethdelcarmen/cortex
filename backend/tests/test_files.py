@@ -16,10 +16,12 @@ from zipfile import ZipFile
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
+from pypdf import PdfWriter
 from sqlalchemy import func, select
 
 from cortex_backend.app import create_app
 from cortex_backend.config import Settings
+from cortex_backend.files import processing
 from cortex_backend.files.models import FileArtifact, FileContextJob
 from cortex_backend.files.processing import process_file_context_once
 from cortex_backend.storage import InMemoryStorage
@@ -512,7 +514,7 @@ async def test_failed_processing_can_be_retried_without_deleting_source(processi
     assert (await client.get(f"/api/v1/files/{file_id}/content")).content == b"not really an image"
 
 
-async def test_docx_falls_back_to_text_when_converter_is_unavailable(processing_context) -> None:
+async def test_docx_retains_context_without_exposing_text_as_preview(processing_context) -> None:
     client, app = processing_context
     app.state.settings.file_converter_command = "cortex-command-that-does-not-exist"
     await setup_owner(client)
@@ -527,13 +529,68 @@ async def test_docx_falls_back_to_text_when_converter_is_unavailable(processing_
     context = await client.get(f"/api/v1/files/{created.json()['id']}/preview")
     assert context.status_code == 200
     assert context.json()["status"] == "ready"
-    assert context.json()["preview_kind"] == "text"
+    assert context.json()["preview_kind"] is None
     assert context.json()["text"] == "Fallback document text"
 
     preview = await client.get(f"/api/v1/files/{created.json()['id']}/preview/content")
+    assert preview.status_code == 409
+    assert preview.json()["detail"]["code"] == "file_preview_unavailable"
+
+    async with app.state.storage.session() as db:
+        artifacts = (
+            await db.scalars(
+                select(FileArtifact).where(
+                    FileArtifact.source_sha256 == created.json()["sha256"],
+                )
+            )
+        ).all()
+    assert {artifact.artifact_kind for artifact in artifacts} == {"text"}
+
+
+async def test_successful_office_conversion_is_served_as_pdf_preview(
+    processing_context,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, app = processing_context
+    await setup_owner(client)
+    converted_pdf = tmp_path / "converted.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    with converted_pdf.open("wb") as handle:
+        writer.write(handle)
+
+    async def fake_convert_office_to_pdf(*args, **kwargs) -> Path:
+        return converted_pdf
+
+    monkeypatch.setattr(processing, "_convert_office_to_pdf", fake_convert_office_to_pdf)
+    created = await upload(client, docx_fixture("Converted document"), "converted.docx")
+
+    assert await process_file_context_once(
+        app.state.storage,
+        app.state.file_storage,
+        app.state.settings,
+    )
+
+    context = await client.get(f"/api/v1/files/{created.json()['id']}/preview")
+    assert context.status_code == 200
+    assert context.json()["status"] == "ready"
+    assert context.json()["preview_kind"] == "pdf"
+
+    preview = await client.get(f"/api/v1/files/{created.json()['id']}/preview/content")
     assert preview.status_code == 200
-    assert preview.text == "Fallback document text"
-    assert preview.headers["content-type"].startswith("text/plain")
+    assert preview.content.startswith(b"%PDF-")
+    assert preview.headers["content-type"] == "application/pdf"
+
+    async with app.state.storage.session() as db:
+        artifacts = (
+            await db.scalars(
+                select(FileArtifact).where(
+                    FileArtifact.source_sha256 == created.json()["sha256"],
+                )
+            )
+        ).all()
+    assert {artifact.artifact_kind for artifact in artifacts} == {"text", "pdf"}
 
 
 async def test_ocr_command_receives_configured_language(

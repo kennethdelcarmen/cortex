@@ -92,11 +92,11 @@ function parseApiError(status: number, body: unknown): ApiError {
   );
 }
 
-export async function apiFetch<T>(
-  path: string,
-  init: RequestInit = {},
-  schema?: z.ZodType<T>,
-): Promise<T> {
+export function apiUrl(path: string) {
+  return new URL(path, apiBaseUrl).toString();
+}
+
+async function fetchApiResponse(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   const method = (init.method ?? "GET").toUpperCase();
   const hasFormDataBody =
@@ -117,7 +117,7 @@ export async function apiFetch<T>(
   let response: Response;
 
   try {
-    response = await fetch(new URL(path, apiBaseUrl), {
+    response = await fetch(apiUrl(path), {
       ...init,
       credentials: "include",
       headers,
@@ -142,6 +142,16 @@ export async function apiFetch<T>(
     throw parseApiError(response.status, body);
   }
 
+  return response;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  init: RequestInit = {},
+  schema?: z.ZodType<T>,
+): Promise<T> {
+  const response = await fetchApiResponse(path, init);
+
   if (response.status === 204) {
     return undefined as T;
   }
@@ -149,6 +159,23 @@ export async function apiFetch<T>(
   try {
     const payload: unknown = await response.json();
     return schema ? schema.parse(payload) : (payload as T);
+  } catch {
+    throw new ApiError(
+      response.status,
+      "invalid_response",
+      "The Cortex service returned an unexpected response.",
+    );
+  }
+}
+
+export async function apiFetchBlob(
+  path: string,
+  init: RequestInit = {},
+): Promise<Blob> {
+  const response = await fetchApiResponse(path, init);
+
+  try {
+    return await response.blob();
   } catch {
     throw new ApiError(
       response.status,
