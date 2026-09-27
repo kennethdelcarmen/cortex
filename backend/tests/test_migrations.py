@@ -232,6 +232,80 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "SELECT type FROM sqlite_master WHERE name = 'content_chunks_fts'"
         ).fetchone() == ("table",)
 
+        money_tables = {
+            "money_accounts",
+            "money_payees",
+            "money_categories",
+            "money_budgets",
+            "money_transactions",
+            "money_postings",
+        }
+        assert money_tables <= tables
+        assert {
+            "id",
+            "user_id",
+            "name",
+            "account_type",
+            "institution_name",
+            "last_four",
+            "currency_code",
+            "opening_balance",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_accounts)")}
+        assert {
+            "id",
+            "user_id",
+            "name",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_payees)")}
+        assert {
+            "id",
+            "user_id",
+            "name",
+            "kind",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_categories)")}
+        assert {
+            "id",
+            "user_id",
+            "category_id",
+            "period",
+            "currency_code",
+            "amount",
+            "created_at",
+            "updated_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_budgets)")}
+        assert {
+            "id",
+            "user_id",
+            "transaction_date",
+            "payee_id",
+            "memo",
+            "state",
+            "reversal_of_id",
+            "created_at",
+            "updated_at",
+            "voided_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_transactions)")}
+        assert {
+            "id",
+            "user_id",
+            "transaction_id",
+            "account_id",
+            "category_id",
+            "currency_code",
+            "amount",
+            "reconciliation_state",
+            "cleared_at",
+            "reconciled_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_postings)")}
+
         indexes = {
             row[1]
             for row in connection.execute(
@@ -274,6 +348,16 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_task_series_files_series_position",
             "ix_content_chunks_owner_source",
             "ix_content_chunks_owner_version",
+            "ix_money_accounts_owner_archived_name",
+            "ix_money_payees_owner_archived_name",
+            "ix_money_categories_owner_archived_name",
+            "ix_money_budgets_owner_period_currency",
+            "ix_money_transactions_owner_date_id",
+            "ix_money_transactions_owner_payee_date",
+            "ix_money_transactions_owner_state_date",
+            "ix_money_postings_owner_account_transaction",
+            "ix_money_postings_owner_category_transaction",
+            "ix_money_postings_owner_reconciliation",
         } <= indexes
 
         for table, parent_table in (
@@ -303,7 +387,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0015_content_chunking",
+            "0016_money_foundation",
         )
 
 

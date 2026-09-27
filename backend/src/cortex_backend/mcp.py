@@ -51,6 +51,73 @@ from .memory.service import (
     restore_note,
     update_note,
 )
+from .money.errors import MoneyError
+from .money.schemas import (
+    AccountCreateRequest,
+    AccountListResponse,
+    AccountResponse,
+    AccountUpdateRequest,
+    BudgetListResponse,
+    BudgetResponse,
+    BudgetUpsertRequest,
+    CategoryCreateRequest,
+    CategoryListResponse,
+    CategoryResponse,
+    CategoryUpdateRequest,
+    PayeeCreateRequest,
+    PayeeListResponse,
+    PayeeResponse,
+    PayeeUpdateRequest,
+    PostingResponse,
+    ReconciliationState,
+    TransactionCreateRequest,
+    TransactionListResponse,
+    TransactionResponse,
+    TransactionReverseRequest,
+    TransactionState,
+    TransactionUpdateRequest,
+)
+from .money.service import (
+    AccountListFilters,
+    AccountRecord,
+    BudgetListFilters,
+    BudgetRecord,
+    CategoryListFilters,
+    CategoryRecord,
+    PayeeListFilters,
+    PayeeRecord,
+    TransactionListFilters,
+    TransactionRecord,
+    archive_account,
+    archive_category,
+    archive_payee,
+    clear_posting,
+    create_account,
+    create_category,
+    create_payee,
+    create_transaction,
+    delete_budget,
+    get_account,
+    get_budget,
+    get_category,
+    get_payee,
+    get_transaction,
+    list_accounts,
+    list_budgets,
+    list_categories,
+    list_payees,
+    list_transactions,
+    reconcile_posting,
+    restore_account,
+    restore_category,
+    restore_payee,
+    reverse_transaction,
+    update_account,
+    update_category,
+    update_payee,
+    update_transaction,
+    upsert_budget,
+)
 from .recovery.errors import RecoveryError
 from .recovery.schemas import (
     RecoveryBatchRequest,
@@ -245,6 +312,87 @@ def _grounded_question_response(package: GroundedQuestionPackage) -> GroundedQue
 
 def _raise_grounding_tool(error: GroundingError) -> None:
     raise ToolError(f"{error.code}: {error.message}") from error
+
+
+def _raise_money_tool(error: MoneyError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
+def _money_account_response(record: AccountRecord) -> AccountResponse:
+    return AccountResponse(
+        id=record.id,
+        name=record.name,
+        account_type=record.account_type,
+        institution_name=record.institution_name,
+        last_four=record.last_four,
+        currency_code=record.currency_code,
+        opening_balance=record.opening_balance,
+        balance=record.balance,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        archived_at=record.archived_at,
+    )
+
+
+def _money_payee_response(record: PayeeRecord) -> PayeeResponse:
+    return PayeeResponse(
+        id=record.id,
+        name=record.name,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        archived_at=record.archived_at,
+    )
+
+
+def _money_category_response(record: CategoryRecord) -> CategoryResponse:
+    return CategoryResponse(
+        id=record.id,
+        name=record.name,
+        kind=record.kind,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        archived_at=record.archived_at,
+    )
+
+
+def _money_budget_response(record: BudgetRecord) -> BudgetResponse:
+    return BudgetResponse(
+        id=record.id,
+        category_id=record.category_id,
+        period=record.period,
+        currency_code=record.currency_code,
+        amount=record.amount,
+        spent_amount=record.spent_amount,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _money_transaction_response(record: TransactionRecord) -> TransactionResponse:
+    return TransactionResponse(
+        id=record.id,
+        transaction_date=record.transaction_date,
+        payee_id=record.payee_id,
+        memo=record.memo,
+        state=TransactionState(record.state),
+        reversal_of_id=record.reversal_of_id,
+        postings=[
+            PostingResponse(
+                id=posting.id,
+                account_id=posting.account_id,
+                category_id=posting.category_id,
+                currency_code=posting.currency_code,
+                amount=posting.amount,
+                reconciliation_state=posting.reconciliation_state,
+                cleared_at=posting.cleared_at,
+                reconciled_at=posting.reconciled_at,
+            )
+            for posting in record.postings
+        ],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        voided_at=record.voided_at,
+    )
 
 
 def create_mcp_server(
@@ -482,6 +630,537 @@ def create_mcp_server(
         except FileError as exc:
             _raise_file_tool(exc)
         return _file_response(record)
+
+    @server.tool(name="create_money_account")
+    async def create_money_account_tool(
+        payload: AccountCreateRequest, ctx: Context | None = None
+    ) -> AccountResponse:
+        """Create an owner-scoped money account."""
+
+        del ctx
+        try:
+            record = await create_account(
+                database_storage(storage), get_mcp_auth().user.id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_account_response(record)
+
+    @server.tool(name="list_money_accounts")
+    async def list_money_accounts_tool(
+        include_archived: bool = False,
+        search: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> AccountListResponse:
+        """List owner-scoped money accounts."""
+
+        del ctx
+        try:
+            page = await list_accounts(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                AccountListFilters(
+                    include_archived=include_archived,
+                    search=search,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return AccountListResponse(
+            items=[_money_account_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_account")
+    async def get_money_account_tool(
+        account_id: str, ctx: Context | None = None
+    ) -> AccountResponse:
+        """Return one owner-scoped money account."""
+
+        del ctx
+        try:
+            record = await get_account(
+                database_storage(storage), get_mcp_auth().user.id, account_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_account_response(record)
+
+    @server.tool(name="update_money_account")
+    async def update_money_account_tool(
+        account_id: str,
+        payload: AccountUpdateRequest,
+        ctx: Context | None = None,
+    ) -> AccountResponse:
+        """Update one owner-scoped money account's safe metadata."""
+
+        del ctx
+        try:
+            record = await update_account(
+                database_storage(storage), get_mcp_auth().user.id, account_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_account_response(record)
+
+    @server.tool(name="archive_money_account")
+    async def archive_money_account_tool(
+        account_id: str, ctx: Context | None = None
+    ) -> AccountResponse:
+        """Archive one owner-scoped money account."""
+
+        del ctx
+        try:
+            record = await archive_account(
+                database_storage(storage), get_mcp_auth().user.id, account_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_account_response(record)
+
+    @server.tool(name="restore_money_account")
+    async def restore_money_account_tool(
+        account_id: str, ctx: Context | None = None
+    ) -> AccountResponse:
+        """Restore one owner-scoped money account."""
+
+        del ctx
+        try:
+            record = await restore_account(
+                database_storage(storage), get_mcp_auth().user.id, account_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_account_response(record)
+
+    @server.tool(name="create_money_payee")
+    async def create_money_payee_tool(
+        payload: PayeeCreateRequest, ctx: Context | None = None
+    ) -> PayeeResponse:
+        """Create an owner-scoped payee."""
+
+        del ctx
+        try:
+            record = await create_payee(database_storage(storage), get_mcp_auth().user.id, payload)
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_payee_response(record)
+
+    @server.tool(name="list_money_payees")
+    async def list_money_payees_tool(
+        include_archived: bool = False,
+        search: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> PayeeListResponse:
+        """List owner-scoped payees."""
+
+        del ctx
+        try:
+            page = await list_payees(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                PayeeListFilters(
+                    include_archived=include_archived,
+                    search=search,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return PayeeListResponse(
+            items=[_money_payee_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_payee")
+    async def get_money_payee_tool(payee_id: str, ctx: Context | None = None) -> PayeeResponse:
+        """Return one owner-scoped payee."""
+
+        del ctx
+        try:
+            record = await get_payee(database_storage(storage), get_mcp_auth().user.id, payee_id)
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_payee_response(record)
+
+    @server.tool(name="update_money_payee")
+    async def update_money_payee_tool(
+        payee_id: str,
+        payload: PayeeUpdateRequest,
+        ctx: Context | None = None,
+    ) -> PayeeResponse:
+        """Update one owner-scoped payee."""
+
+        del ctx
+        try:
+            record = await update_payee(
+                database_storage(storage), get_mcp_auth().user.id, payee_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_payee_response(record)
+
+    @server.tool(name="archive_money_payee")
+    async def archive_money_payee_tool(payee_id: str, ctx: Context | None = None) -> PayeeResponse:
+        """Archive one owner-scoped payee."""
+
+        del ctx
+        try:
+            record = await archive_payee(
+                database_storage(storage), get_mcp_auth().user.id, payee_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_payee_response(record)
+
+    @server.tool(name="restore_money_payee")
+    async def restore_money_payee_tool(payee_id: str, ctx: Context | None = None) -> PayeeResponse:
+        """Restore one owner-scoped payee."""
+
+        del ctx
+        try:
+            record = await restore_payee(
+                database_storage(storage), get_mcp_auth().user.id, payee_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_payee_response(record)
+
+    @server.tool(name="create_money_category")
+    async def create_money_category_tool(
+        payload: CategoryCreateRequest, ctx: Context | None = None
+    ) -> CategoryResponse:
+        """Create an owner-scoped income or expense category."""
+
+        del ctx
+        try:
+            record = await create_category(
+                database_storage(storage), get_mcp_auth().user.id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_category_response(record)
+
+    @server.tool(name="list_money_categories")
+    async def list_money_categories_tool(
+        include_archived: bool = False,
+        kind: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> CategoryListResponse:
+        """List owner-scoped money categories."""
+
+        del ctx
+        from .money.schemas import CategoryKind
+
+        try:
+            parsed_kind = CategoryKind(kind) if kind is not None else None
+            page = await list_categories(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                CategoryListFilters(
+                    include_archived=include_archived,
+                    kind=parsed_kind,
+                    search=search,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except (MoneyError, ValueError) as exc:
+            if isinstance(exc, MoneyError):
+                _raise_money_tool(exc)
+            raise ToolError("money_invalid_query: The money list query is invalid.") from exc
+        return CategoryListResponse(
+            items=[_money_category_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_category")
+    async def get_money_category_tool(
+        category_id: str, ctx: Context | None = None
+    ) -> CategoryResponse:
+        """Return one owner-scoped money category."""
+
+        del ctx
+        try:
+            record = await get_category(
+                database_storage(storage), get_mcp_auth().user.id, category_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_category_response(record)
+
+    @server.tool(name="update_money_category")
+    async def update_money_category_tool(
+        category_id: str,
+        payload: CategoryUpdateRequest,
+        ctx: Context | None = None,
+    ) -> CategoryResponse:
+        """Update one owner-scoped money category."""
+
+        del ctx
+        try:
+            record = await update_category(
+                database_storage(storage), get_mcp_auth().user.id, category_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_category_response(record)
+
+    @server.tool(name="archive_money_category")
+    async def archive_money_category_tool(
+        category_id: str, ctx: Context | None = None
+    ) -> CategoryResponse:
+        """Archive one owner-scoped money category."""
+
+        del ctx
+        try:
+            record = await archive_category(
+                database_storage(storage), get_mcp_auth().user.id, category_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_category_response(record)
+
+    @server.tool(name="restore_money_category")
+    async def restore_money_category_tool(
+        category_id: str, ctx: Context | None = None
+    ) -> CategoryResponse:
+        """Restore one owner-scoped money category."""
+
+        del ctx
+        try:
+            record = await restore_category(
+                database_storage(storage), get_mcp_auth().user.id, category_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_category_response(record)
+
+    @server.tool(name="upsert_money_budget")
+    async def upsert_money_budget_tool(
+        period: str,
+        category_id: str,
+        currency_code: str,
+        payload: BudgetUpsertRequest,
+        ctx: Context | None = None,
+    ) -> BudgetResponse:
+        """Create or update one monthly category budget."""
+
+        del ctx
+        try:
+            record = await upsert_budget(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                period,
+                category_id,
+                currency_code,
+                payload,
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_budget_response(record)
+
+    @server.tool(name="list_money_budgets")
+    async def list_money_budgets_tool(
+        period: str | None = None,
+        currency_code: str | None = None,
+        category_id: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> BudgetListResponse:
+        """List owner-scoped monthly category budgets."""
+
+        del ctx
+        try:
+            page = await list_budgets(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                BudgetListFilters(
+                    period=period,
+                    currency_code=currency_code,
+                    category_id=category_id,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return BudgetListResponse(
+            items=[_money_budget_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_budget")
+    async def get_money_budget_tool(budget_id: str, ctx: Context | None = None) -> BudgetResponse:
+        """Return one owner-scoped monthly category budget."""
+
+        del ctx
+        try:
+            record = await get_budget(database_storage(storage), get_mcp_auth().user.id, budget_id)
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_budget_response(record)
+
+    @server.tool(name="delete_money_budget")
+    async def delete_money_budget_tool(budget_id: str, ctx: Context | None = None) -> str:
+        """Delete one owner-scoped monthly category budget."""
+
+        del ctx
+        try:
+            await delete_budget(database_storage(storage), get_mcp_auth().user.id, budget_id)
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return "Budget deleted."
+
+    @server.tool(name="create_money_transaction")
+    async def create_money_transaction_tool(
+        payload: TransactionCreateRequest, ctx: Context | None = None
+    ) -> TransactionResponse:
+        """Create one balanced owner-scoped money transaction."""
+
+        del ctx
+        try:
+            record = await create_transaction(
+                database_storage(storage), get_mcp_auth().user.id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="list_money_transactions")
+    async def list_money_transactions_tool(
+        date_from: date | None = None,
+        date_to: date | None = None,
+        account_id: str | None = None,
+        payee_id: str | None = None,
+        category_id: str | None = None,
+        currency_code: str | None = None,
+        reconciliation_state: ReconciliationState | None = None,
+        include_voided: bool = False,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> TransactionListResponse:
+        """List owner-scoped money transactions with REST-equivalent filters."""
+
+        del ctx
+        try:
+            page = await list_transactions(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                TransactionListFilters(
+                    date_from=date_from,
+                    date_to=date_to,
+                    account_id=account_id,
+                    payee_id=payee_id,
+                    category_id=category_id,
+                    currency_code=currency_code,
+                    reconciliation_state=reconciliation_state,
+                    include_voided=include_voided,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return TransactionListResponse(
+            items=[_money_transaction_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_transaction")
+    async def get_money_transaction_tool(
+        transaction_id: str, ctx: Context | None = None
+    ) -> TransactionResponse:
+        """Return one owner-scoped money transaction."""
+
+        del ctx
+        try:
+            record = await get_transaction(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="update_money_transaction")
+    async def update_money_transaction_tool(
+        transaction_id: str,
+        payload: TransactionUpdateRequest,
+        ctx: Context | None = None,
+    ) -> TransactionResponse:
+        """Update an unlocked owner-scoped money transaction."""
+
+        del ctx
+        try:
+            record = await update_transaction(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="clear_money_posting")
+    async def clear_money_posting_tool(
+        transaction_id: str,
+        posting_id: str,
+        ctx: Context | None = None,
+    ) -> TransactionResponse:
+        """Mark one transaction posting cleared."""
+
+        del ctx
+        try:
+            record = await clear_posting(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id, posting_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="reconcile_money_posting")
+    async def reconcile_money_posting_tool(
+        transaction_id: str,
+        posting_id: str,
+        ctx: Context | None = None,
+    ) -> TransactionResponse:
+        """Mark one cleared transaction posting reconciled."""
+
+        del ctx
+        try:
+            record = await reconcile_posting(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id, posting_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="reverse_money_transaction")
+    async def reverse_money_transaction_tool(
+        transaction_id: str,
+        payload: TransactionReverseRequest | None = None,
+        ctx: Context | None = None,
+    ) -> TransactionResponse:
+        """Create a compensating transaction for a reconciled transaction."""
+
+        del ctx
+        try:
+            record = await reverse_transaction(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
 
     @server.tool(name="create_task")
     async def create_task_tool(payload: TaskCreateRequest, ctx: Context) -> TaskResponse:

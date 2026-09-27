@@ -15,6 +15,7 @@ from cortex_backend.config import Settings
 from cortex_backend.files import models as _file_models  # noqa: F401
 from cortex_backend.logs import models as _activity_log_models  # noqa: F401
 from cortex_backend.memory import models as _memory_models  # noqa: F401
+from cortex_backend.money import models as _money_models  # noqa: F401
 from cortex_backend.tasks import models as _task_models  # noqa: F401
 
 config = context.config

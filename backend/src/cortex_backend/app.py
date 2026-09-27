@@ -12,6 +12,7 @@ from .api.files import router as files_router
 from .api.health import router as health_router
 from .api.logs import router as activity_logs_router
 from .api.mcp import MCPAuthMiddleware
+from .api.money import router as money_router
 from .api.notes import router as notes_router
 from .api.recovery import router as recovery_router
 from .api.tags import router as tags_router
@@ -119,6 +120,7 @@ def create_app(
     application.include_router(v1_router)
     application.include_router(auth_router)
     application.include_router(activity_logs_router)
+    application.include_router(money_router)
     application.include_router(files_router)
     application.include_router(notes_router)
     application.include_router(recovery_router)

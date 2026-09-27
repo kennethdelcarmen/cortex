@@ -145,6 +145,25 @@ ready file-processing jobs, followed by an aggregate percentage. A final
 in scope was checked; records whose source version is already current are
 skipped safely.
 
+## Money foundation
+
+Migration `0016_money_foundation` adds owner-scoped accounts, payees, flat
+income and expense categories, monthly budgets, and balanced transaction
+postings. Apply it with the normal migration command before starting the
+service:
+
+```bash
+uv run alembic upgrade head
+```
+
+Money REST routes are under `/api/v1/money`. Transactions use exact decimal
+strings, calendar dates, and account/category postings that must balance to
+zero independently for each supported currency. Account balances and budget
+spending are calculated from the posting ledger; credentials and full account
+numbers are never stored. Reconciled postings are immutable and corrected with
+the transaction reversal action. Matching authenticated MCP tools use the same
+service functions as REST.
+
 ## Internal retrieval contract and FTS baseline
 
 `cortex_backend.chunking.service.search_chunks` is the current internal
