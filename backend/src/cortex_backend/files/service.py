@@ -17,6 +17,7 @@ from uuid import uuid4
 from sqlalchemy import and_, delete, exists, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..chunking.service import delete_source_chunks
 from ..storage import DatabaseStorage
 from ..tags.service import existing_tag_names, resolve_tag_names
 from ..tasks.models import Tag
@@ -688,6 +689,12 @@ async def permanently_delete_file(
                         FileContextJob.user_id == user_id,
                         FileContextJob.source_sha256 == file.sha256,
                     )
+                )
+                await delete_source_chunks(
+                    db,
+                    "file",
+                    file.sha256,
+                    user_id=user_id,
                 )
             await db.execute(
                 text("DELETE FROM files_fts WHERE file_id = :file_id"),

@@ -25,6 +25,7 @@ from ..attachments.service import (
     replace_series_attachments,
     replace_task_attachments,
 )
+from ..chunking.service import ChunkSource, delete_source_chunks, replace_source_chunks
 from ..files.service import FileRecord
 from ..storage import DatabaseStorage
 from ..tags.schemas import TagColor
@@ -245,6 +246,16 @@ def _record(
     )
 
 
+def _chunk_source(task: Task) -> ChunkSource:
+    return ChunkSource(
+        user_id=task.user_id,
+        source_type="task",
+        source_id=task.id,
+        title=task.title,
+        text="\n\n".join(part for part in (task.title, task.description or "") if part),
+    )
+
+
 async def _tags_for_tasks(db: AsyncSession, task_ids: list[str]) -> dict[str, list[str]]:
     if not task_ids:
         return {}
@@ -451,6 +462,19 @@ async def _materialize_series(
                     .on_conflict_do_nothing()
                 )
             await copy_series_attachments(db, series.id, task_id)
+            await replace_source_chunks(
+                db,
+                ChunkSource(
+                    user_id=series.user_id,
+                    source_type="task",
+                    source_id=task_id,
+                    title=series.title,
+                    text="\n\n".join(
+                        part for part in (series.title, series.description or "") if part
+                    ),
+                ),
+                now=now,
+            )
         series.materialized_through_at = occurrence.utc_at
 
     series.updated_at = now
@@ -607,6 +631,7 @@ async def create_task(
             await db.flush()
             await _replace_tags(db, task.id, user_id, payload.tags)
             await replace_task_attachments(db, user_id, task.id, payload.file_ids)
+            await replace_source_chunks(db, _chunk_source(task), now=now)
             tags = await _tags_for_tasks(db, [task.id])
             attachments = await attachments_for_tasks(db, user_id, [task.id])
             return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
@@ -1059,8 +1084,11 @@ async def update_task(
                 await _replace_tags(db, task.id, user_id, values["tags"])
             if "file_ids" in values:
                 await replace_task_attachments(db, user_id, task.id, values["file_ids"] or [])
-            task.updated_at = _utc_now()
+            now = _utc_now()
+            task.updated_at = now
             await db.flush()
+            if set(values).intersection({"title", "description"}):
+                await replace_source_chunks(db, _chunk_source(task), now=now)
             tags = await _tags_for_tasks(db, [task.id])
             attachments = await attachments_for_tasks(db, user_id, [task.id])
             return _record(task, tags.get(task.id, []), attachments.get(task.id, []))
@@ -1174,6 +1202,7 @@ async def permanently_delete_task(
             task = await _get_task_row(db, user_id, task_id, include_deleted=True)
             if task.deleted_at is None:
                 raise TaskMustBeDeletedError()
+            await delete_source_chunks(db, "task", task.id, user_id=user_id)
             await db.execute(delete(TaskTag).where(TaskTag.task_id == task.id))
             await delete_task_attachments(db, task.id)
             await db.delete(task)
@@ -1270,6 +1299,7 @@ async def _apply_series_template(
         await _replace_tags(db, task.id, series.user_id, list(tag_names))
         if attachment_ids is not None:
             await replace_task_attachments(db, series.user_id, task.id, attachment_ids)
+        await replace_source_chunks(db, _chunk_source(task), now=now)
 
 
 async def update_task_series(

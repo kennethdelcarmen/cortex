@@ -13,6 +13,7 @@ function TooltipProvider({ ...props }: TooltipPrimitive.Provider.Props) {
 
 function TooltipContent({
   className,
+  positionerClassName,
   anchor,
   side = "top",
   sideOffset = 8,
@@ -22,7 +23,9 @@ function TooltipContent({
   Pick<
     TooltipPrimitive.Positioner.Props,
     "anchor" | "collisionPadding" | "side" | "sideOffset"
-  >) {
+  > & {
+    positionerClassName?: string
+  }) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner
@@ -30,7 +33,7 @@ function TooltipContent({
         side={side}
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
-        className="isolate z-50"
+        className={cn("isolate z-50", positionerClassName)}
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"

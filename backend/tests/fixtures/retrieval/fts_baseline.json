@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "owner": "owner-a",
+      "source_type": "note",
+      "source_id": "10000000-0000-0000-0000-000000000001",
+      "title": "Quarterly tax plan",
+      "text": "Quarterly tax plan\n\nThe quarterly tax filing deadline is June 15. Gather receipts before submitting the estimate.",
+      "active": true
+    },
+    {
+      "owner": "owner-a",
+      "source_type": "note",
+      "source_id": "10000000-0000-0000-0000-000000000002",
+      "title": "Weekend hiking",
+      "text": "Weekend hiking\n\nPack water, a headlamp, and a light rain shell for the trail.",
+      "active": true
+    },
+    {
+      "owner": "owner-a",
+      "source_type": "note",
+      "source_id": "10000000-0000-0000-0000-000000000003",
+      "title": "Deleted archive",
+      "text": "Deleted archive phrase should never be retrieved.",
+      "active": false
+    },
+    {
+      "owner": "owner-b",
+      "source_type": "note",
+      "source_id": "10000000-0000-0000-0000-000000000004",
+      "title": "Private owner note",
+      "text": "Other owner private phrase belongs only to owner B.",
+      "active": true
+    },
+    {
+      "owner": "owner-a",
+      "source_type": "task",
+      "source_id": "20000000-0000-0000-0000-000000000001",
+      "title": "Submit quarterly tax forms",
+      "text": "Submit quarterly tax forms before the filing deadline and attach the receipt.",
+      "active": true
+    },
+    {
+      "owner": "owner-a",
+      "source_type": "file",
+      "source_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "title": "reimbursement-policy.txt",
+      "text": "Travel reimbursement policy: include the expense receipt and business purpose with every claim.",
+      "active": true
+    }
+  ],
+  "queries": [
+    {
+      "id": "note-title-and-body",
+      "owner": "owner-a",
+      "query": "quarterly filing deadline",
+      "expected": [
+        {
+          "source_type": "note",
+          "source_id": "10000000-0000-0000-0000-000000000001",
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "id": "note-body-terms",
+      "owner": "owner-a",
+      "query": "gather receipts",
+      "source_types": ["note"],
+      "expected": [
+        {
+          "source_type": "note",
+          "source_id": "10000000-0000-0000-0000-000000000001",
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "id": "task-source-filter",
+      "owner": "owner-a",
+      "query": "quarterly tax forms",
+      "source_types": ["task"],
+      "expected": [
+        {
+          "source_type": "task",
+          "source_id": "20000000-0000-0000-0000-000000000001",
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "id": "file-extracted-text",
+      "owner": "owner-a",
+      "query": "reimbursement expense receipt",
+      "source_types": ["file"],
+      "expected": [
+        {
+          "source_type": "file",
+          "source_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "id": "mixed-source-ranking",
+      "owner": "owner-a",
+      "query": "tax filing",
+      "limit": 5,
+      "expected": [
+        {
+          "source_type": "note",
+          "source_id": "10000000-0000-0000-0000-000000000001",
+          "ordinal": 0
+        },
+        {
+          "source_type": "task",
+          "source_id": "20000000-0000-0000-0000-000000000001",
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "id": "deleted-source-excluded",
+      "owner": "owner-a",
+      "query": "deleted archive phrase",
+      "expected": []
+    },
+    {
+      "id": "owner-isolation",
+      "owner": "owner-a",
+      "query": "other owner private phrase",
+      "expected": []
+    },
+    {
+      "id": "no-match",
+      "owner": "owner-a",
+      "query": "quantum bananas",
+      "expected": []
+    }
+  ]
+}

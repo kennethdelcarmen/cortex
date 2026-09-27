@@ -419,6 +419,7 @@ export function TaskCalendar({
               <TooltipContent
                 id={`cortex-task-tooltip-${activeTooltip.task.id}`}
                 anchor={activeTooltip.anchor}
+                positionerClassName="z-[10000]"
                 className="cortex-task-tooltip__content"
               >
                 <TaskCalendarTooltip task={activeTooltip.task} />

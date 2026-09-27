@@ -19,6 +19,7 @@ from xml.etree import ElementTree
 
 from sqlalchemy import and_, or_, select
 
+from ..chunking.service import ChunkSource, replace_source_chunks
 from ..config import Settings
 from ..storage import DatabaseStorage
 from .errors import FileError
@@ -626,6 +627,17 @@ async def _finish_job(
                 job.user_id,
                 job.source_sha256,
                 extracted.text.decode("utf-8", errors="replace"),
+            )
+            await replace_source_chunks(
+                db,
+                ChunkSource(
+                    user_id=job.user_id,
+                    source_type="file",
+                    source_id=job.source_sha256,
+                    text=extracted.text.decode("utf-8", errors="replace"),
+                    version_salt=FILE_CONTEXT_VERSION,
+                ),
+                now=now,
             )
 
 

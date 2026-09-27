@@ -79,6 +79,10 @@ Migration `0014_record_file_attachments` adds ordered note, task, and recurring
 task-series file links. Active note/task/series responses expose only active
 files; soft-deleted links remain durable for restore and permanent file deletion
 cleans them up.
+Migration `0015_content_chunking` adds deterministic owner-scoped chunks for
+notes, materialized tasks, and extracted file text, plus an internal SQLite FTS5
+index. Chunk rows are maintained transactionally by source writes and file
+processing; no embeddings or public chunk API are included yet.
 
 File processing runs in a restart-safe local worker. Configure
 `CORTEX_FILE_PROCESSING_ENABLED`, `CORTEX_FILE_PROCESSING_POLL_SECONDS`,
@@ -125,6 +129,83 @@ uv sync
 uv run alembic upgrade head
 uv run uvicorn cortex_backend.app:app --reload
 ```
+
+After upgrading an existing database, populate chunks in restart-safe batches:
+
+```bash
+uv run python -m cortex_backend.chunking.backfill --batch-size 100
+```
+
+The backfill reuses current source versions and can be run again after an
+interruption. It reads ready extracted-text artifacts from the configured file
+storage directory, so the database and file directory must be available
+together. Progress is printed after each committed batch for notes, tasks, and
+ready file-processing jobs, followed by an aggregate percentage. A final
+`overall ... (100.0%)` and `backfill complete: 100.0%` means every source record
+in scope was checked; records whose source version is already current are
+skipped safely.
+
+## Internal retrieval contract and FTS baseline
+
+`cortex_backend.chunking.service.search_chunks` is the current internal
+retrieval contract for future RAG workflows. It returns ranked text chunks with
+their source type, source ID, source version, title, ordinal, and file aliases.
+Each result has a one-based `rank` and a higher-is-better `score` derived from
+SQLite FTS5's BM25 score. The rank is the stable ordering signal; scores are
+diagnostic and should not be compared across different indexes or retrievers.
+
+Queries are trimmed, Unicode case-folded, split into word tokens, and matched
+with AND semantics: every token must be present in a chunk. Empty and
+punctuation-only queries return no results. Query text is limited to 200
+characters and result limits range from 1 to 100. Results are owner-scoped,
+exclude soft-deleted notes, tasks, and files, and use deterministic
+source/chunk tie-breakers after FTS relevance ordering.
+
+The current baseline is lexical SQLite FTS5 retrieval only. It does not create
+embeddings, call an LLM, synthesize answers, or expose a REST/MCP retrieval
+endpoint yet.
+
+## Internal RAG context assembly
+
+`cortex_backend.chunking.context.assemble_context` is the next internal step
+after `search_chunks`. In simple terms, retrieval finds possible answers, while
+context assembly chooses the useful pieces to show to a future AI model.
+
+The assembler accepts the user's question and the already-ranked FTS chunks. It
+keeps the best passages in rank order up to a 6,000-character default budget.
+The budget counts the formatted citation and source labels as well as passage
+text, so the returned `context_text` stays within the requested limit. A
+different positive character budget can be supplied by the caller; characters
+are used as a predictable first approximation of model tokens.
+
+Before selecting a passage, the assembler removes blank text, exact duplicates,
+and passages with at least 85% word overlap with a passage already selected.
+Each selected passage receives a citation such as `[1]` and retains its chunk
+ID, source type, source ID, source name, source version, chunk position, FTS
+rank, diagnostic score, and file aliases. These fields let a future answer
+generator explain where an answer came from without exposing database logic to
+the model prompt.
+
+No matching context is a safe, normal result. The returned package sets
+`has_context` to `false`, leaves `context_text` empty, and explains the reason
+with `empty_reason` such as `no_results`, `no_usable_text`, or
+`budget_too_small`. Future answer generation should check this flag and avoid
+inventing an answer when there is no supporting passage. The assembler itself
+does not call an AI model or generate an answer.
+
+The checked-in evaluation corpus covers note, task, and extracted-file text,
+deleted-source filtering, source filters, no-match queries, and owner
+isolation. Run its repeatable quality and latency report from `backend/` with:
+
+```bash
+uv run python -m cortex_backend.chunking.benchmark
+```
+
+The report measures recall@5, mean reciprocal rank, negative-query empty-result
+coverage, and median/p95 service-call latency. Latency is reported for
+comparison and is not used as a machine-dependent test threshold. Change the
+number of timing repetitions with `--repetitions`, or provide another fixture
+with `--fixture`.
 
 The service does not run Alembic automatically. When file processing is
 enabled, `/readyz` remains unavailable until the database and file-processing
@@ -291,12 +372,13 @@ uv run mypy src
 ```
 
 The backend now has a persistent SQLite storage foundation, versioned auth,
-task, recurrence, activity-log, notes, and immutable file-context schemas, local-
-owner authentication, and shared REST/MCP domain slices. Knowledge, finance,
-and self-hosting packaging remain deferred. To roll back the application after
-the additive file-context migration, deploy the previous application while
-leaving the new tables and derived artifacts in place. Only run a downgrade
-against a backed-up local database when intentionally removing these schemas;
-restore the database, raw files, and derived artifacts as one backup set.
+task, recurrence, activity-log, notes, immutable file-context, and content-
+chunk schemas, local-owner authentication, and shared REST/MCP domain slices.
+Knowledge retrieval APIs, embeddings, finance, and self-hosting packaging
+remain deferred. To roll back the application after additive file-context or
+chunking migrations, deploy the previous application while leaving the new
+tables and derived artifacts in place. Only run a downgrade against a backed-
+up local database when intentionally removing these schemas; restore the
+database, raw files, and derived artifacts as one backup set.
 Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
 removing the task, recurrence, activity-log, notes, and file schemas together.

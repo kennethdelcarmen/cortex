@@ -20,6 +20,8 @@ from ..attachments.service import (
     delete_note_attachments,
     replace_note_attachments,
 )
+from ..chunking.service import ChunkSource, delete_source_chunks, replace_source_chunks
+from ..chunking.text import html_to_chunk_text
 from ..files.service import FileRecord
 from ..storage import DatabaseStorage
 from ..tags.schemas import TagColor
@@ -121,6 +123,18 @@ def _record(
         created_at=_as_utc(note.created_at),
         updated_at=_as_utc(note.updated_at),
         deleted_at=_as_utc(note.deleted_at) if note.deleted_at is not None else None,
+    )
+
+
+def _chunk_source(note: Note) -> ChunkSource:
+    return ChunkSource(
+        user_id=note.user_id,
+        source_type="note",
+        source_id=note.id,
+        title=note.title,
+        text="\n\n".join(
+            part for part in (note.title or "", html_to_chunk_text(note.body)) if part
+        ),
     )
 
 
@@ -298,6 +312,7 @@ async def create_note(
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
             attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
             await _sync_fts(db, note, tags)
+            await replace_source_chunks(db, _chunk_source(note), now=now)
             return _record(note, tags, attachments)
 
 
@@ -340,6 +355,8 @@ async def update_note(
             tags = (await _tags_for_notes(db, [note.id])).get(note.id, [])
             attachments = (await attachments_for_notes(db, user_id, [note.id])).get(note.id, [])
             await _sync_fts(db, note, tags)
+            if fields.intersection({"title", "body"}):
+                await replace_source_chunks(db, _chunk_source(note), now=now)
             return _record(note, tags, attachments)
 
 
@@ -391,6 +408,7 @@ async def permanently_delete_note(
                 text("DELETE FROM notes_fts WHERE note_id = :note_id"),
                 {"note_id": note.id},
             )
+            await delete_source_chunks(db, "note", note.id, user_id=user_id)
             await db.execute(delete(NoteTag).where(NoteTag.note_id == note.id))
             await delete_note_attachments(db, note.id)
             await db.delete(note)

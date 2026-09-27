@@ -215,6 +215,22 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "extractor_version",
             "created_at",
         }
+        chunk_columns = {row[1] for row in connection.execute("PRAGMA table_info(content_chunks)")}
+        assert chunk_columns == {
+            "id",
+            "user_id",
+            "source_type",
+            "source_id",
+            "source_version",
+            "source_title",
+            "ordinal",
+            "text",
+            "created_at",
+            "updated_at",
+        }
+        assert connection.execute(
+            "SELECT type FROM sqlite_master WHERE name = 'content_chunks_fts'"
+        ).fetchone() == ("table",)
 
         indexes = {
             row[1]
@@ -256,6 +272,8 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_task_files_task_position",
             "ix_task_series_files_file_id",
             "ix_task_series_files_series_position",
+            "ix_content_chunks_owner_source",
+            "ix_content_chunks_owner_version",
         } <= indexes
 
         for table, parent_table in (
@@ -285,7 +303,7 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0014_record_file_attachments",
+            "0015_content_chunking",
         )
 
 
