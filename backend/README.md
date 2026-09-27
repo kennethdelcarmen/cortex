@@ -162,8 +162,9 @@ exclude soft-deleted notes, tasks, and files, and use deterministic
 source/chunk tie-breakers after FTS relevance ordering.
 
 The current baseline is lexical SQLite FTS5 retrieval only. It does not create
-embeddings, call an LLM, synthesize answers, or expose a REST/MCP retrieval
-endpoint yet.
+embeddings, call an LLM, synthesize answers, or expose a REST retrieval
+endpoint. External agents can use the authenticated MCP preparation tool
+described below.
 
 ## Internal RAG context assembly
 
@@ -192,6 +193,22 @@ with `empty_reason` such as `no_results`, `no_usable_text`, or
 `budget_too_small`. Future answer generation should check this flag and avoid
 inventing an answer when there is no supporting passage. The assembler itself
 does not call an AI model or generate an answer.
+
+## Grounded MCP question preparation
+
+`cortex_backend.grounding.service.prepare_question` composes retrieval and
+context assembly for an authenticated external agent. The `prepare_question`
+MCP tool accepts only the user's question and returns a bounded context,
+citation-bearing passage metadata, and a model-ready prompt when supporting
+context is available. The prompt instructs the external agent to answer only
+from the supplied context and cite factual claims with the returned labels.
+
+Cortex does not call an LLM or require an LLM API key for this workflow. The
+external MCP agent remains responsible for generating the natural-language
+answer. When retrieval has no usable supporting passage, the tool returns
+`has_context: false`, no prompt or citations, the retrieval `empty_reason`, and
+the stable message `I couldn’t find supporting information for that question.`
+Agents must not guess from missing context.
 
 The checked-in evaluation corpus covers note, task, and extracted-file text,
 deleted-source filtering, source filters, no-match queries, and owner

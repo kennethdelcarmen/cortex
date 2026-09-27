@@ -28,6 +28,10 @@ from .files.service import (
     update_file,
 )
 from .files.storage import FileBlobStore
+from .grounding.errors import GroundingError
+from .grounding.schemas import GroundedCitationResponse, GroundedQuestionResponse
+from .grounding.service import GroundedQuestionPackage
+from .grounding.service import prepare_question as prepare_grounded_question
 from .logs.errors import ActivityLogError
 from .logs.schemas import (
     ActivityLogCreateRequest,
@@ -211,6 +215,38 @@ def _raise_recovery_tool(error: RecoveryError) -> None:
     raise ToolError(f"{error.code}: {error.message}") from error
 
 
+def _grounded_question_response(package: GroundedQuestionPackage) -> GroundedQuestionResponse:
+    return GroundedQuestionResponse(
+        question=package.question,
+        prompt=package.prompt,
+        context_text=package.context_text,
+        citations=[
+            GroundedCitationResponse(
+                citation=passage.citation,
+                text=passage.text,
+                chunk_id=passage.chunk_id,
+                source_type=passage.source_type,
+                source_id=passage.source_id,
+                source_name=passage.source_name,
+                source_version=passage.source_version,
+                chunk_ordinal=passage.chunk_ordinal,
+                retrieval_rank=passage.retrieval_rank,
+                retrieval_score=passage.retrieval_score,
+                file_ids=list(passage.file_ids),
+                file_names=list(passage.file_names),
+            )
+            for passage in package.citations
+        ],
+        has_context=package.has_context,
+        empty_reason=package.empty_reason,
+        message=package.message,
+    )
+
+
+def _raise_grounding_tool(error: GroundingError) -> None:
+    raise ToolError(f"{error.code}: {error.message}") from error
+
+
 def create_mcp_server(
     name: str = "Cortex",
     storage: Storage | None = None,
@@ -219,6 +255,23 @@ def create_mcp_server(
     """Create the MCP registry backed by shared domain service functions."""
 
     server = FastMCP(name)
+
+    @server.tool(name="prepare_question")
+    async def prepare_question_tool(
+        question: str, ctx: Context | None = None
+    ) -> GroundedQuestionResponse:
+        """Prepare owner-scoped context and a citation-grounded prompt for answering a question."""
+
+        del ctx
+        try:
+            package = await prepare_grounded_question(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                question,
+            )
+        except GroundingError as exc:
+            _raise_grounding_tool(exc)
+        return _grounded_question_response(package)
 
     @server.tool(name="list_recovery_items")
     async def list_recovery_items_tool(
