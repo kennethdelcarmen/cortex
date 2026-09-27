@@ -1,6 +1,4 @@
-import {
-  WorkspaceModuleRoute,
-} from "@/features/workspace/components/workspace-shell";
+import { MoneyRoute } from "@/features/money/components/money-page";
 
 export const metadata = {
   title: "Money · Cortex",
@@ -8,5 +6,5 @@ export const metadata = {
 };
 
 export default function MoneyPage() {
-  return <WorkspaceModuleRoute moduleKey="money" />;
+  return <MoneyRoute />;
 }
