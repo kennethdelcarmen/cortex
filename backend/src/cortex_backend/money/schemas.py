@@ -64,6 +64,13 @@ def normalize_name(value: str) -> str:
     return normalized
 
 
+def normalize_display_name(value: str) -> str:
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        raise ValueError("name must contain content")
+    return normalized
+
+
 def normalize_transaction_name(value: str) -> str:
     normalized = " ".join(value.strip().split())
     if not normalized:
@@ -123,7 +130,7 @@ class AccountCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        return normalize_name(value)
+        return normalize_display_name(value)
 
     @field_validator("institution_name")
     @classmethod
@@ -158,7 +165,7 @@ class AccountUpdateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str | None) -> str | None:
-        return normalize_name(value) if value is not None else None
+        return normalize_display_name(value) if value is not None else None
 
     @field_validator("institution_name")
     @classmethod

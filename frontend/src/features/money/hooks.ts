@@ -70,6 +70,27 @@ export function useMoneyCatalog() {
   };
 }
 
+export function useMoneyAccounts(options: {
+  archivedOnly?: boolean;
+  search?: string;
+} = {}) {
+  const archivedOnly = options.archivedOnly ?? false;
+  const search = options.search?.trim() ?? "";
+
+  return useInfiniteQuery({
+    queryKey: [...moneyAccountsQueryKey, "list", { archivedOnly, search }],
+    queryFn: ({ pageParam }: { pageParam: string }) =>
+      listMoneyAccounts({
+        archivedOnly,
+        cursor: pageParam,
+        limit: 50,
+        search: search || undefined,
+      }),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
 export function useMoneyTransactions(filters: MoneyTransactionFilters) {
   return useInfiniteQuery({
     queryKey: [...moneyTransactionsQueryKey, "list", filters],

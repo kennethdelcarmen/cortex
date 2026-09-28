@@ -198,6 +198,7 @@ async def list_accounts_route(
     storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
     auth: Annotated[CurrentAuth, Depends(get_current_auth)],
     include_archived: bool = False,
+    archived_only: bool = False,
     search: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: str | None = None,
@@ -208,6 +209,7 @@ async def list_accounts_route(
             auth.user.id,
             AccountListFilters(
                 include_archived=include_archived,
+                archived_only=archived_only,
                 search=search,
                 limit=limit,
                 cursor=cursor,

@@ -280,7 +280,7 @@ function TransactionsWorkspace() {
     queryFn: () => getMoneySummary(period, currencyCode),
   });
   const transactions = transactionsQuery.data?.pages.flatMap((page) => page.items) ?? [];
-  const currencyOptions = ["PHP", ...new Set(catalog.accounts.map((account) => account.currency_code))];
+  const currencyOptions = [...new Set(["PHP", ...catalog.accounts.map((account) => account.currency_code)])];
   const rangeLabel = rangeMode === "month" ? periodLabel(period) : rangeMode === "custom" ? `${dateFrom || "Start"}–${dateTo || "End"}` : "All history";
 
   function openCreate() {

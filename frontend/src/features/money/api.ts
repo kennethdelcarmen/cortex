@@ -10,6 +10,22 @@ export const moneyAccountTypeSchema = z.enum([
   "investment",
   "other",
 ]);
+export const moneyAccountTypeOptions = moneyAccountTypeSchema.options;
+export const moneyCurrencyCodes = [
+  "USD",
+  "EUR",
+  "GBP",
+  "CHF",
+  "CAD",
+  "AUD",
+  "SGD",
+  "HKD",
+  "CNY",
+  "INR",
+  "PHP",
+  "JPY",
+  "KRW",
+] as const;
 export const moneyCategoryKindSchema = z.enum(["income", "expense"]);
 export const moneyTransactionStateSchema = z.enum(["posted", "voided"]);
 export const moneyReconciliationStateSchema = z.enum([
@@ -120,6 +136,21 @@ export type MoneyCategoryKind = z.infer<typeof moneyCategoryKindSchema>;
 export type MoneyReconciliationState = z.infer<typeof moneyReconciliationStateSchema>;
 export type MoneyTransactionListPage = z.infer<typeof moneyTransactionListSchema>;
 
+export type MoneyAccountCreateInput = {
+  name: string;
+  account_type: MoneyAccountType;
+  institution_name?: string | null;
+  last_four?: string | null;
+  currency_code: string;
+  opening_balance: string;
+};
+
+export type MoneyAccountUpdateInput = {
+  name?: string;
+  institution_name?: string | null;
+  last_four?: string | null;
+};
+
 export type MoneyPostingInput = {
   account_id?: string;
   category_id?: string;
@@ -159,12 +190,19 @@ export const moneySummaryQueryKey = [...moneyQueryKey, "summary"] as const;
 
 function addListParams(
   params: URLSearchParams,
-  options: { cursor?: string; limit?: number; search?: string; includeArchived?: boolean },
+  options: {
+    cursor?: string;
+    limit?: number;
+    search?: string;
+    includeArchived?: boolean;
+    archivedOnly?: boolean;
+  },
 ) {
   params.set("limit", String(options.limit ?? 100));
   if (options.cursor) params.set("cursor", options.cursor);
   if (options.search) params.set("search", options.search);
   if (options.includeArchived) params.set("include_archived", "true");
+  if (options.archivedOnly) params.set("archived_only", "true");
 }
 
 export function listMoneyAccounts(options: {
@@ -172,6 +210,7 @@ export function listMoneyAccounts(options: {
   limit?: number;
   search?: string;
   includeArchived?: boolean;
+  archivedOnly?: boolean;
 } = {}) {
   const params = new URLSearchParams();
   addListParams(params, options);
@@ -245,6 +284,49 @@ export function listMoneyTransactions(filters: MoneyTransactionFilters, cursor?:
 export function getMoneySummary(period: string, currencyCode = "PHP") {
   const params = new URLSearchParams({ period, currency_code: currencyCode });
   return apiFetch(`/api/v1/money/summary?${params}`, {}, moneySummarySchema);
+}
+
+export function getMoneyAccount(accountId: string) {
+  return apiFetch(
+    `/api/v1/money/accounts/${encodeURIComponent(accountId)}`,
+    {},
+    moneyAccountSchema,
+  );
+}
+
+export function createMoneyAccount(payload: MoneyAccountCreateInput) {
+  return apiFetch(
+    "/api/v1/money/accounts",
+    { method: "POST", body: JSON.stringify(payload) },
+    moneyAccountSchema,
+  );
+}
+
+export function updateMoneyAccount(
+  accountId: string,
+  payload: MoneyAccountUpdateInput,
+) {
+  return apiFetch(
+    `/api/v1/money/accounts/${encodeURIComponent(accountId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    moneyAccountSchema,
+  );
+}
+
+export function archiveMoneyAccount(accountId: string) {
+  return apiFetch(
+    `/api/v1/money/accounts/${encodeURIComponent(accountId)}/archive`,
+    { method: "POST" },
+    moneyAccountSchema,
+  );
+}
+
+export function restoreMoneyAccount(accountId: string) {
+  return apiFetch(
+    `/api/v1/money/accounts/${encodeURIComponent(accountId)}/restore`,
+    { method: "POST" },
+    moneyAccountSchema,
+  );
 }
 
 export function getMoneyTransaction(transactionId: string) {

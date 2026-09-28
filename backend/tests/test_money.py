@@ -92,7 +92,7 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
     )
     assert account.status_code == 201, account.text
     account_body = account.json()
-    assert account_body["name"] == "main checking"
+    assert account_body["name"] == "Main Checking"
     assert account_body["balance"] == "100.00"
 
     category = await client.post(
@@ -445,15 +445,88 @@ async def test_money_archive_and_cursor_listing(client: AsyncClient) -> None:
     assert len(second_page.json()["items"]) == 1
 
     account_id = first_page.json()["items"][0]["id"]
+    second_account_id = second_page.json()["items"][0]["id"]
     archived = await client.post(
         f"/api/v1/money/accounts/{account_id}/archive",
         headers=headers,
     )
     assert archived.status_code == 200
+    archived_second = await client.post(
+        f"/api/v1/money/accounts/{second_account_id}/archive",
+        headers=headers,
+    )
+    assert archived_second.status_code == 200
     active = await client.get("/api/v1/money/accounts")
     assert account_id not in {item["id"] for item in active.json()["items"]}
     included = await client.get("/api/v1/money/accounts", params={"include_archived": "true"})
     assert account_id in {item["id"] for item in included.json()["items"]}
+    archived_only = await client.get(
+        "/api/v1/money/accounts", params={"archived_only": "true", "limit": 1}
+    )
+    assert archived_only.status_code == 200
+    assert archived_only.json()["next_cursor"]
+    archived_only_second_page = await client.get(
+        "/api/v1/money/accounts",
+        params={
+            "archived_only": "true",
+            "limit": 1,
+            "cursor": archived_only.json()["next_cursor"],
+        },
+    )
+    archived_ids = {
+        item["id"]
+        for item in archived_only.json()["items"] + archived_only_second_page.json()["items"]
+    }
+    assert archived_ids == {account_id, second_account_id}
+
+    restored = await client.post(
+        f"/api/v1/money/accounts/{account_id}/restore",
+        headers=headers,
+    )
+    assert restored.status_code == 200
+    restored_second = await client.post(
+        f"/api/v1/money/accounts/{second_account_id}/restore",
+        headers=headers,
+    )
+    assert restored_second.status_code == 200
+    restored_active = await client.get("/api/v1/money/accounts")
+    assert account_id in {item["id"] for item in restored_active.json()["items"]}
+    restored_archived = await client.get("/api/v1/money/accounts", params={"archived_only": "true"})
+    assert account_id not in {item["id"] for item in restored_archived.json()["items"]}
+
+
+async def test_money_account_update_preserves_balance(client: AsyncClient) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+    account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Main checking",
+            "account_type": "checking",
+            "institution_name": "Local bank",
+            "last_four": "1234",
+            "currency_code": "PHP",
+            "opening_balance": "100.00",
+        },
+    )
+    assert account.status_code == 201, account.text
+    account_id = account.json()["id"]
+
+    updated = await client.patch(
+        f"/api/v1/money/accounts/{account_id}",
+        headers=headers,
+        json={"name": "Updated checking", "institution_name": "New bank"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["name"] == "Updated checking"
+    assert updated.json()["institution_name"] == "New bank"
+    assert updated.json()["balance"] == "100.00"
+    assert updated.json()["currency_code"] == "PHP"
+    searched = await client.get(
+        "/api/v1/money/accounts", params={"search": "updated CHECKING"}
+    )
+    assert [item["name"] for item in searched.json()["items"]] == ["Updated checking"]
 
 
 async def test_money_transaction_name_search_covers_ledger_context_and_cursor_fingerprint(
@@ -613,11 +686,28 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
             },
         )
         assert created_account.status_code == 200, created_account.text
-        assert "mcp checking" in created_account.text
+        assert "MCP checking" in created_account.text
 
         account_list = await client.get("/api/v1/money/accounts")
-        assert [item["name"] for item in account_list.json()["items"]] == ["mcp checking"]
+        assert [item["name"] for item in account_list.json()["items"]] == ["MCP checking"]
         account_id = account_list.json()["items"][0]["id"]
+
+        mcp_account_list = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_money_accounts",
+                    "arguments": {"archived_only": False},
+                },
+            },
+        )
+        assert mcp_account_list.status_code == 200, mcp_account_list.text
+        mcp_account_list_body = json.loads(mcp_account_list.json()["result"]["content"][0]["text"])
+        assert [item["id"] for item in mcp_account_list_body["items"]] == [account_id]
 
         created_category = await client.post(
             "/mcp/",

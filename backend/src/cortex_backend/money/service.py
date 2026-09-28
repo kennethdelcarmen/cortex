@@ -156,6 +156,7 @@ class TransactionRecord:
 @dataclass(frozen=True)
 class AccountListFilters:
     include_archived: bool = False
+    archived_only: bool = False
     search: str | None = None
     limit: int = DEFAULT_LIMIT
     cursor: str | None = None
@@ -689,11 +690,13 @@ async def list_accounts(
     fingerprint = _filter_fingerprint(filters)
     async with storage.session() as db:
         statement = select(MoneyAccount).where(MoneyAccount.user_id == user_id)
-        if not filters.include_archived:
+        if filters.archived_only:
+            statement = statement.where(MoneyAccount.archived_at.is_not(None))
+        elif not filters.include_archived:
             statement = statement.where(MoneyAccount.archived_at.is_(None))
         if filters.search:
             search = normalize_name(filters.search)
-            statement = statement.where(MoneyAccount.name.contains(search))
+            statement = statement.where(func.lower(MoneyAccount.name).contains(search))
         if filters.cursor:
             updated_at, resource_id = _parse_updated_cursor(filters.cursor, fingerprint)
             statement = statement.where(

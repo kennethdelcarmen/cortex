@@ -666,6 +666,7 @@ def create_mcp_server(
     @server.tool(name="list_money_accounts")
     async def list_money_accounts_tool(
         include_archived: bool = False,
+        archived_only: bool = False,
         search: str | None = None,
         limit: int = 50,
         cursor: str | None = None,
@@ -680,6 +681,7 @@ def create_mcp_server(
                 get_mcp_auth().user.id,
                 AccountListFilters(
                     include_archived=include_archived,
+                    archived_only=archived_only,
                     search=search,
                     limit=limit,
                     cursor=cursor,
