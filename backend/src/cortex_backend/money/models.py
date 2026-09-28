@@ -149,6 +149,7 @@ class MoneyTransaction(Base):
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     payee_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("money_payees.id", ondelete="RESTRICT"), nullable=True
     )

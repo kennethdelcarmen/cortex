@@ -285,6 +285,7 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "id",
             "user_id",
             "transaction_date",
+            "name",
             "payee_id",
             "memo",
             "state",
@@ -387,8 +388,57 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0016_money_foundation",
+            "0017_money_transaction_names",
         )
+
+
+def test_transaction_name_migration_backfills_legacy_records(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0016_money_foundation")
+
+    with sqlite3.connect(database_path) as connection:
+        timestamp = datetime.now(UTC).isoformat()
+        connection.execute(
+            "INSERT INTO users (id, email, password_hash, created_at, updated_at, "
+            "password_changed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("user-1", "owner@example.com", "hash", timestamp, timestamp, timestamp),
+        )
+        connection.execute(
+            "INSERT INTO money_payees (id, user_id, name, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("payee-1", "user-1", "Legacy payee", timestamp, timestamp),
+        )
+        for transaction_id, payee_id, memo in (
+            ("transaction-1", "payee-1", "Legacy memo"),
+            ("transaction-2", None, "  Trimmed memo  "),
+            ("transaction-3", None, None),
+        ):
+            connection.execute(
+                "INSERT INTO money_transactions "
+                "(id, user_id, transaction_date, payee_id, memo, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (transaction_id, "user-1", "2026-09-01", payee_id, memo, timestamp, timestamp),
+            )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            "SELECT id, name FROM money_transactions ORDER BY id"
+        ).fetchall()
+        assert rows == [
+            ("transaction-1", "Legacy payee"),
+            ("transaction-2", "Trimmed memo"),
+            ("transaction-3", "Untitled transaction"),
+        ]
+        name_column = next(
+            row
+            for row in connection.execute("PRAGMA table_info(money_transactions)")
+            if row[1] == "name"
+        )
+        assert name_column[3] == 1
 
 
 def test_file_search_migration_requeues_ready_context_and_backfills_metadata(

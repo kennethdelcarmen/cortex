@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..storage import DatabaseStorage
@@ -115,6 +115,18 @@ class BudgetRecord:
 
 
 @dataclass(frozen=True)
+class MoneySummaryRecord:
+    period: str
+    currency_code: str
+    total_balance: str
+    income_amount: str
+    spending_amount: str
+    budget_amount: str
+    budget_spent_amount: str
+    budget_remaining_amount: str
+
+
+@dataclass(frozen=True)
 class PostingRecord:
     id: str
     account_id: str | None
@@ -130,6 +142,7 @@ class PostingRecord:
 class TransactionRecord:
     id: str
     transaction_date: date
+    name: str
     payee_id: str | None
     memo: str | None
     state: str
@@ -178,6 +191,7 @@ class BudgetListFilters:
 class TransactionListFilters:
     date_from: date | None = None
     date_to: date | None = None
+    search: str | None = None
     account_id: str | None = None
     payee_id: str | None = None
     category_id: str | None = None
@@ -253,6 +267,15 @@ def _filter_fingerprint(filters: object) -> str:
             payload[key] = value.value
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _normalize_transaction_search(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split()).casefold()
+    if len(normalized) > 200:
+        raise InvalidMoneyQueryError()
+    return normalized or None
 
 
 def _encode_cursor(payload: dict[str, object]) -> str:
@@ -351,6 +374,7 @@ def _transaction_record(
     return TransactionRecord(
         id=transaction.id,
         transaction_date=transaction.transaction_date,
+        name=transaction.name,
         payee_id=transaction.payee_id,
         memo=transaction.memo,
         state=transaction.state,
@@ -369,6 +393,8 @@ async def _account_balance(db: AsyncSession, account: MoneyAccount) -> Decimal:
         .where(
             MoneyPosting.account_id == account.id,
             MoneyTransaction.user_id == account.user_id,
+            MoneyTransaction.state == "posted",
+            MoneyTransaction.reversal_of_id.is_(None),
         )
     )
     return _decimal(account.opening_balance) + sum(
@@ -395,9 +421,102 @@ async def _spent_for_budget(
             MoneyPosting.currency_code == currency_code,
             MoneyTransaction.transaction_date >= start,
             MoneyTransaction.transaction_date < end,
+            MoneyTransaction.state == "posted",
+            MoneyTransaction.reversal_of_id.is_(None),
         )
     )
     return sum((_decimal(value) for (value,) in result.all()), Decimal(0))
+
+
+async def get_money_summary(
+    storage: DatabaseStorage,
+    user_id: str,
+    period: str,
+    currency_code: str = "PHP",
+) -> MoneySummaryRecord:
+    period = validate_period(period)
+    currency_code = normalize_currency(currency_code)
+    year, month = (int(part) for part in period.split("-"))
+    start = date(year, month, 1)
+    end = date(year + (month == 12), 1 if month == 12 else month + 1, 1)
+
+    async with storage.session() as db:
+        accounts = list(
+            (
+                await db.execute(
+                    select(MoneyAccount).where(
+                        MoneyAccount.user_id == user_id,
+                        MoneyAccount.currency_code == currency_code,
+                        MoneyAccount.archived_at.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        total_balance = Decimal(0)
+        for account in accounts:
+            total_balance += await _account_balance(db, account)
+
+        category_postings = await db.execute(
+            select(MoneyPosting.amount, MoneyCategory.kind)
+            .join(MoneyTransaction, MoneyTransaction.id == MoneyPosting.transaction_id)
+            .join(MoneyCategory, MoneyCategory.id == MoneyPosting.category_id)
+            .where(
+                MoneyPosting.user_id == user_id,
+                MoneyPosting.currency_code == currency_code,
+                MoneyTransaction.transaction_date >= start,
+                MoneyTransaction.transaction_date < end,
+                MoneyTransaction.state == "posted",
+                MoneyTransaction.reversal_of_id.is_(None),
+            )
+        )
+        income_amount = Decimal(0)
+        spending_amount = Decimal(0)
+        for amount, kind in category_postings.all():
+            value = _decimal(amount)
+            if kind == CategoryKind.INCOME.value:
+                income_amount -= value
+            elif kind == CategoryKind.EXPENSE.value:
+                spending_amount += value
+
+        budgets = list(
+            (
+                await db.execute(
+                    select(MoneyBudget).where(
+                        MoneyBudget.user_id == user_id,
+                        MoneyBudget.period == period,
+                        MoneyBudget.currency_code == currency_code,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        budget_amount = sum((_decimal(budget.amount) for budget in budgets), Decimal(0))
+        budget_spent_amount = Decimal(0)
+        for budget in budgets:
+            budget_spent_amount += await _spent_for_budget(
+                db,
+                user_id,
+                budget.category_id,
+                period,
+                currency_code,
+            )
+
+        return MoneySummaryRecord(
+            period=period,
+            currency_code=currency_code,
+            total_balance=_decimal_text(total_balance, currency_code),
+            income_amount=_decimal_text(income_amount, currency_code),
+            spending_amount=_decimal_text(spending_amount, currency_code),
+            budget_amount=_decimal_text(budget_amount, currency_code),
+            budget_spent_amount=_decimal_text(budget_spent_amount, currency_code),
+            budget_remaining_amount=_decimal_text(
+                budget_amount - budget_spent_amount,
+                currency_code,
+            ),
+        )
 
 
 async def _get_account(
@@ -972,6 +1091,7 @@ async def create_transaction(
                 id=str(uuid4()),
                 user_id=user_id,
                 transaction_date=payload.transaction_date,
+                name=payload.name,
                 payee_id=payload.payee_id,
                 memo=payload.memo,
                 state="posted",
@@ -1016,6 +1136,8 @@ async def update_transaction(
             ):
                 raise TransactionLockedError()
             fields = payload.model_fields_set
+            if "name" in fields and payload.name is not None:
+                transaction.name = payload.name
             if "payee_id" in fields:
                 await _validate_payee(db, user_id, payload.payee_id)
                 transaction.payee_id = payload.payee_id
@@ -1051,10 +1173,12 @@ async def list_transactions(
     if filters.date_from and filters.date_to and filters.date_from > filters.date_to:
         raise InvalidMoneyQueryError()
     currency_code = normalize_currency(filters.currency_code) if filters.currency_code else None
+    search = _normalize_transaction_search(filters.search)
     fingerprint = _filter_fingerprint(
         TransactionListFilters(
             date_from=filters.date_from,
             date_to=filters.date_to,
+            search=search,
             account_id=filters.account_id,
             payee_id=filters.payee_id,
             category_id=filters.category_id,
@@ -1073,6 +1197,34 @@ async def list_transactions(
             statement = statement.where(MoneyTransaction.transaction_date >= filters.date_from)
         if filters.date_to is not None:
             statement = statement.where(MoneyTransaction.transaction_date <= filters.date_to)
+        if search is not None:
+            search_pattern = f"%{search}%"
+            payee_match = exists().where(
+                MoneyPayee.id == MoneyTransaction.payee_id,
+                MoneyPayee.user_id == user_id,
+                func.lower(MoneyPayee.name).like(search_pattern),
+            )
+            category_match = exists().where(
+                MoneyPosting.transaction_id == MoneyTransaction.id,
+                MoneyPosting.category_id == MoneyCategory.id,
+                MoneyCategory.user_id == user_id,
+                func.lower(MoneyCategory.name).like(search_pattern),
+            )
+            account_match = exists().where(
+                MoneyPosting.transaction_id == MoneyTransaction.id,
+                MoneyPosting.account_id == MoneyAccount.id,
+                MoneyAccount.user_id == user_id,
+                func.lower(MoneyAccount.name).like(search_pattern),
+            )
+            statement = statement.where(
+                or_(
+                    func.lower(MoneyTransaction.name).like(search_pattern),
+                    func.lower(MoneyTransaction.memo).like(search_pattern),
+                    payee_match,
+                    category_match,
+                    account_match,
+                )
+            )
         if filters.payee_id is not None:
             statement = statement.where(MoneyTransaction.payee_id == filters.payee_id)
         posting_exists = exists().where(MoneyPosting.transaction_id == MoneyTransaction.id)
@@ -1227,6 +1379,7 @@ async def reverse_transaction(
                 id=str(uuid4()),
                 user_id=user_id,
                 transaction_date=payload.transaction_date or original.transaction_date,
+                name=f"Reversal of {original.name}",
                 payee_id=original.payee_id,
                 memo=payload.memo or f"Reversal of {original.id}",
                 state="posted",

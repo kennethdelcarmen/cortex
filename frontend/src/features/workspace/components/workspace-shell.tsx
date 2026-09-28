@@ -142,7 +142,7 @@ function MemorySubNavigation() {
 
 function MoneySubNavigation() {
   const pathname = usePathname();
-  const futureViews = ["Transactions", "Budgets", "Accounts"];
+  const futureViews = ["Budgets", "Accounts"];
 
   return (
     <nav
@@ -160,6 +160,18 @@ function MoneySubNavigation() {
         )}
       >
         Overview
+      </Link>
+      <Link
+        href="/money/transactions"
+        aria-current={pathname.startsWith("/money/transactions") ? "page" : undefined}
+        className={cn(
+          "block rounded-md px-3 py-1.5 text-xs outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
+          pathname.startsWith("/money/transactions")
+            ? "bg-chart-4/10 font-medium text-foreground"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+        )}
+      >
+        Transactions
       </Link>
       {futureViews.map((label) => (
         <span

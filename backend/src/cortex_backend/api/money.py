@@ -20,6 +20,7 @@ from ..money.schemas import (
     CategoryListResponse,
     CategoryResponse,
     CategoryUpdateRequest,
+    MoneySummaryResponse,
     PayeeCreateRequest,
     PayeeListResponse,
     PayeeResponse,
@@ -40,6 +41,7 @@ from ..money.service import (
     BudgetRecord,
     CategoryListFilters,
     CategoryRecord,
+    MoneySummaryRecord,
     PayeeListFilters,
     PayeeRecord,
     TransactionListFilters,
@@ -56,6 +58,7 @@ from ..money.service import (
     get_account,
     get_budget,
     get_category,
+    get_money_summary,
     get_payee,
     get_transaction,
     list_accounts,
@@ -137,10 +140,24 @@ def _budget_response(record: BudgetRecord) -> BudgetResponse:
     )
 
 
+def _money_summary_response(record: MoneySummaryRecord) -> MoneySummaryResponse:
+    return MoneySummaryResponse(
+        period=record.period,
+        currency_code=record.currency_code,
+        total_balance=record.total_balance,
+        income_amount=record.income_amount,
+        spending_amount=record.spending_amount,
+        budget_amount=record.budget_amount,
+        budget_spent_amount=record.budget_spent_amount,
+        budget_remaining_amount=record.budget_remaining_amount,
+    )
+
+
 def _transaction_response(record: TransactionRecord) -> TransactionResponse:
     return TransactionResponse(
         id=record.id,
         transaction_date=record.transaction_date,
+        name=record.name,
         payee_id=record.payee_id,
         memo=record.memo,
         state=TransactionState(record.state),
@@ -488,6 +505,21 @@ async def list_budgets_route(
     )
 
 
+@router.get("/summary", response_model=MoneySummaryResponse)
+async def money_summary_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    period: str,
+    currency_code: str = "PHP",
+) -> MoneySummaryResponse:
+    try:
+        return _money_summary_response(
+            await get_money_summary(storage, auth.user.id, period, currency_code)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
 @router.get("/budgets/{budget_id}", response_model=BudgetResponse)
 async def get_budget_route(
     budget_id: str,
@@ -535,6 +567,7 @@ async def list_transactions_route(
     auth: Annotated[CurrentAuth, Depends(get_current_auth)],
     date_from: date | None = None,
     date_to: date | None = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
     account_id: str | None = None,
     payee_id: str | None = None,
     category_id: str | None = None,
@@ -551,6 +584,7 @@ async def list_transactions_route(
             TransactionListFilters(
                 date_from=date_from,
                 date_to=date_to,
+                search=search,
                 account_id=account_id,
                 payee_id=payee_id,
                 category_id=category_id,

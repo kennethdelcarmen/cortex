@@ -64,6 +64,7 @@ from .money.schemas import (
     CategoryListResponse,
     CategoryResponse,
     CategoryUpdateRequest,
+    MoneySummaryResponse,
     PayeeCreateRequest,
     PayeeListResponse,
     PayeeResponse,
@@ -84,6 +85,7 @@ from .money.service import (
     BudgetRecord,
     CategoryListFilters,
     CategoryRecord,
+    MoneySummaryRecord,
     PayeeListFilters,
     PayeeRecord,
     TransactionListFilters,
@@ -100,6 +102,7 @@ from .money.service import (
     get_account,
     get_budget,
     get_category,
+    get_money_summary,
     get_payee,
     get_transaction,
     list_accounts,
@@ -368,10 +371,24 @@ def _money_budget_response(record: BudgetRecord) -> BudgetResponse:
     )
 
 
+def _money_summary_response(record: MoneySummaryRecord) -> MoneySummaryResponse:
+    return MoneySummaryResponse(
+        period=record.period,
+        currency_code=record.currency_code,
+        total_balance=record.total_balance,
+        income_amount=record.income_amount,
+        spending_amount=record.spending_amount,
+        budget_amount=record.budget_amount,
+        budget_spent_amount=record.budget_spent_amount,
+        budget_remaining_amount=record.budget_remaining_amount,
+    )
+
+
 def _money_transaction_response(record: TransactionRecord) -> TransactionResponse:
     return TransactionResponse(
         id=record.id,
         transaction_date=record.transaction_date,
+        name=record.name,
         payee_id=record.payee_id,
         memo=record.memo,
         state=TransactionState(record.state),
@@ -1023,6 +1040,26 @@ def create_mcp_server(
             _raise_money_tool(exc)
         return "Budget deleted."
 
+    @server.tool(name="get_money_summary")
+    async def get_money_summary_tool(
+        period: str,
+        currency_code: str = "PHP",
+        ctx: Context | None = None,
+    ) -> MoneySummaryResponse:
+        """Return an owner-scoped money summary for one period and currency."""
+
+        del ctx
+        try:
+            record = await get_money_summary(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                period,
+                currency_code,
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_summary_response(record)
+
     @server.tool(name="create_money_transaction")
     async def create_money_transaction_tool(
         payload: TransactionCreateRequest, ctx: Context | None = None
@@ -1042,6 +1079,7 @@ def create_mcp_server(
     async def list_money_transactions_tool(
         date_from: date | None = None,
         date_to: date | None = None,
+        search: str | None = None,
         account_id: str | None = None,
         payee_id: str | None = None,
         category_id: str | None = None,
@@ -1062,6 +1100,7 @@ def create_mcp_server(
                 TransactionListFilters(
                     date_from=date_from,
                     date_to=date_to,
+                    search=search,
                     account_id=account_id,
                     payee_id=payee_id,
                     category_id=category_id,

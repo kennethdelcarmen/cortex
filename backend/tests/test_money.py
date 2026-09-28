@@ -1,5 +1,6 @@
 """Money API behavior over a migrated temporary SQLite database."""
 
+import json
 import os
 import subprocess
 import sys
@@ -115,6 +116,7 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
         headers=headers,
         json={
             "transaction_date": "2026-09-27",
+            "name": "Weekly groceries",
             "payee_id": payee_id,
             "memo": "Weekly groceries",
             "postings": [
@@ -133,10 +135,20 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
     )
     assert transaction.status_code == 201, transaction.text
     transaction_body = transaction.json()
+    assert transaction_body["name"] == "Weekly groceries"
     assert {posting["amount"] for posting in transaction_body["postings"]} == {
         "-10.00",
         "10.00",
     }
+
+    renamed = await client.patch(
+        f"/api/v1/money/transactions/{transaction_body['id']}",
+        headers=headers,
+        json={"name": "  Saturday groceries  "},
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Saturday groceries"
+    transaction_body = renamed.json()
 
     refreshed_account = await client.get(f"/api/v1/money/accounts/{account_body['id']}")
     assert refreshed_account.status_code == 200
@@ -180,6 +192,7 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
     )
     assert reversal.status_code == 200, reversal.text
     assert reversal.json()["reversal_of_id"] == transaction_body["id"]
+    assert reversal.json()["name"] == "Reversal of Saturday groceries"
 
     final_account = await client.get(f"/api/v1/money/accounts/{account_body['id']}")
     assert final_account.json()["balance"] == "100.00"
@@ -224,11 +237,34 @@ async def test_money_rejects_unbalanced_currency_and_auth_mutations(client: Asyn
     )
     assert category.status_code == 201
 
+    missing_name = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-27",
+            "name": "   ",
+            "postings": [],
+        },
+    )
+    assert missing_name.status_code == 422
+
+    long_name = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-27",
+            "name": "x" * 201,
+            "postings": [],
+        },
+    )
+    assert long_name.status_code == 422
+
     unbalanced = await client.post(
         "/api/v1/money/transactions",
         headers=headers,
         json={
             "transaction_date": "2026-09-27",
+            "name": "Unbalanced transaction",
             "postings": [
                 {
                     "account_id": account.json()["id"],
@@ -256,6 +292,135 @@ async def test_money_rejects_unbalanced_currency_and_auth_mutations(client: Asyn
         },
     )
     assert unsupported_currency.status_code == 422
+
+
+async def test_money_summary_aggregates_currency_and_reversal_state(client: AsyncClient) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+
+    php_account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "PHP checking",
+            "account_type": "checking",
+            "currency_code": "PHP",
+            "opening_balance": "100.00",
+        },
+    )
+    usd_account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "USD checking",
+            "account_type": "checking",
+            "currency_code": "USD",
+            "opening_balance": "50.00",
+        },
+    )
+    expense = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Groceries", "kind": "expense"},
+    )
+    income = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Salary", "kind": "income"},
+    )
+    budget = await client.put(
+        f"/api/v1/money/budgets/2026-09/{expense.json()['id']}/PHP",
+        headers=headers,
+        json={"amount": "20.00"},
+    )
+    assert budget.status_code == 200
+
+    reversed_transaction = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-10",
+            "name": "PHP expense",
+            "postings": [
+                {
+                    "account_id": php_account.json()["id"],
+                    "currency_code": "PHP",
+                    "amount": "-10.00",
+                },
+                {
+                    "category_id": expense.json()["id"],
+                    "currency_code": "PHP",
+                    "amount": "10.00",
+                },
+            ],
+        },
+    )
+    account_posting = next(
+        posting
+        for posting in reversed_transaction.json()["postings"]
+        if posting["account_id"]
+    )
+    await client.post(
+        f"/api/v1/money/transactions/{reversed_transaction.json()['id']}/postings/{account_posting['id']}/clear",
+        headers=headers,
+    )
+    await client.post(
+        f"/api/v1/money/transactions/{reversed_transaction.json()['id']}/postings/{account_posting['id']}/reconcile",
+        headers=headers,
+    )
+    reversal = await client.post(
+        f"/api/v1/money/transactions/{reversed_transaction.json()['id']}/reverse",
+        headers=headers,
+    )
+    assert reversal.status_code == 200
+
+    income_transaction = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-11",
+            "name": "PHP income",
+            "postings": [
+                {
+                    "account_id": php_account.json()["id"],
+                    "currency_code": "PHP",
+                    "amount": "40.00",
+                },
+                {
+                    "category_id": income.json()["id"],
+                    "currency_code": "PHP",
+                    "amount": "-40.00",
+                },
+            ],
+        },
+    )
+    assert income_transaction.status_code == 201
+
+    php_summary = await client.get(
+        "/api/v1/money/summary",
+        params={"period": "2026-09", "currency_code": "PHP"},
+    )
+    assert php_summary.status_code == 200, php_summary.text
+    assert php_summary.json() == {
+        "period": "2026-09",
+        "currency_code": "PHP",
+        "total_balance": "140.00",
+        "income_amount": "40.00",
+        "spending_amount": "0.00",
+        "budget_amount": "20.00",
+        "budget_spent_amount": "0.00",
+        "budget_remaining_amount": "20.00",
+    }
+
+    usd_summary = await client.get(
+        "/api/v1/money/summary",
+        params={"period": "2026-09", "currency_code": "USD"},
+    )
+    assert usd_summary.status_code == 200, usd_summary.text
+    assert usd_summary.json()["total_balance"] == "50.00"
+    assert usd_summary.json()["income_amount"] == "0.00"
+    assert usd_summary.json()["spending_amount"] == "0.00"
+    assert usd_account.json()["currency_code"] == "USD"
 
 
 async def test_money_archive_and_cursor_listing(client: AsyncClient) -> None:
@@ -289,6 +454,83 @@ async def test_money_archive_and_cursor_listing(client: AsyncClient) -> None:
     assert account_id not in {item["id"] for item in active.json()["items"]}
     included = await client.get("/api/v1/money/accounts", params={"include_archived": "true"})
     assert account_id in {item["id"] for item in included.json()["items"]}
+
+
+async def test_money_transaction_name_search_covers_ledger_context_and_cursor_fingerprint(
+    client: AsyncClient,
+) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+    account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={"name": "Main account", "account_type": "checking", "currency_code": "PHP"},
+    )
+    category = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Groceries", "kind": "expense"},
+    )
+    payee = await client.post(
+        "/api/v1/money/payees",
+        headers=headers,
+        json={"name": "Saturday market"},
+    )
+    assert account.status_code == category.status_code == payee.status_code == 201
+
+    first = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-20",
+            "name": "Grocery run",
+            "memo": "Fresh produce",
+            "payee_id": payee.json()["id"],
+            "postings": [
+                {"account_id": account.json()["id"], "currency_code": "PHP", "amount": "-10.00"},
+                {"category_id": category.json()["id"], "currency_code": "PHP", "amount": "10.00"},
+            ],
+        },
+    )
+    second = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-19",
+            "name": "Internet bill",
+            "memo": "Monthly service",
+            "postings": [
+                {"account_id": account.json()["id"], "currency_code": "PHP", "amount": "-20.00"},
+                {"category_id": category.json()["id"], "currency_code": "PHP", "amount": "20.00"},
+            ],
+        },
+    )
+    assert first.status_code == second.status_code == 201
+
+    async def search(term: str):
+        response = await client.get("/api/v1/money/transactions", params={"search": term})
+        assert response.status_code == 200, response.text
+        return {item["id"] for item in response.json()["items"]}
+
+    first_id = first.json()["id"]
+    assert first_id in await search("grocery")
+    assert first_id in await search("produce")
+    assert first_id in await search("market")
+    assert first_id in await search("groceries")
+    assert first_id in await search("main account")
+    assert second.json()["id"] in await search("internet")
+
+    first_page = await client.get(
+        "/api/v1/money/transactions",
+        params={"search": "main", "limit": 1},
+    )
+    assert first_page.status_code == 200
+    assert first_page.json()["next_cursor"]
+    different_search = await client.get(
+        "/api/v1/money/transactions",
+        params={"search": "groceries", "limit": 1, "cursor": first_page.json()["next_cursor"]},
+    )
+    assert different_search.status_code == 400
 
 
 @asynccontextmanager
@@ -406,6 +648,7 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
                     "arguments": {
                         "payload": {
                             "transaction_date": "2026-09-27",
+                            "name": "MCP transaction",
                             "postings": [
                                 {
                                     "account_id": account_id,
@@ -424,5 +667,29 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
             },
         )
         assert created_transaction.status_code == 200, created_transaction.text
+        assert "MCP transaction" in created_transaction.text
         rest_transactions = await client.get("/api/v1/money/transactions")
         assert len(rest_transactions.json()["items"]) == 1
+        assert rest_transactions.json()["items"][0]["name"] == "MCP transaction"
+        rest_summary = await client.get(
+            "/api/v1/money/summary",
+            params={"period": "2026-09", "currency_code": "USD"},
+        )
+        assert rest_summary.status_code == 200, rest_summary.text
+
+        summary = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_money_summary",
+                    "arguments": {"period": "2026-09", "currency_code": "USD"},
+                },
+            },
+        )
+        assert summary.status_code == 200, summary.text
+        mcp_summary = json.loads(summary.json()["result"]["content"][0]["text"])
+        assert mcp_summary == rest_summary.json()

@@ -64,6 +64,13 @@ def normalize_name(value: str) -> str:
     return normalized
 
 
+def normalize_transaction_name(value: str) -> str:
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        raise ValueError("transaction name must contain content")
+    return normalized
+
+
 def normalize_currency(value: str) -> str:
     normalized = value.strip().upper()
     if normalized not in SUPPORTED_CURRENCY_EXPONENTS:
@@ -232,6 +239,7 @@ class PostingRequest(BaseModel):
 
 class TransactionCreateRequest(BaseModel):
     transaction_date: date
+    name: str = Field(min_length=1, max_length=200)
     payee_id: str | None = None
     memo: str | None = Field(default=None, max_length=10_000)
     postings: list[PostingRequest] = Field(min_length=2, max_length=100)
@@ -244,9 +252,15 @@ class TransactionCreateRequest(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return normalize_transaction_name(value)
+
 
 class TransactionUpdateRequest(BaseModel):
     transaction_date: date | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     payee_id: str | None = None
     memo: str | None = Field(default=None, max_length=10_000)
     postings: list[PostingRequest] | None = Field(default=None, min_length=2, max_length=100)
@@ -258,6 +272,11 @@ class TransactionUpdateRequest(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        return normalize_transaction_name(value) if value is not None else None
 
 
 class TransactionReverseRequest(BaseModel):
@@ -315,6 +334,17 @@ class BudgetResponse(BaseModel):
     updated_at: datetime
 
 
+class MoneySummaryResponse(BaseModel):
+    period: str
+    currency_code: str
+    total_balance: str
+    income_amount: str
+    spending_amount: str
+    budget_amount: str
+    budget_spent_amount: str
+    budget_remaining_amount: str
+
+
 class PostingResponse(BaseModel):
     id: str
     account_id: str | None
@@ -329,6 +359,7 @@ class PostingResponse(BaseModel):
 class TransactionResponse(BaseModel):
     id: str
     transaction_date: date
+    name: str
     payee_id: str | None
     memo: str | None
     state: TransactionState
