@@ -25,6 +25,7 @@ type MoneyResourceCreateDialogProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   error?: string;
   pending?: boolean;
+  description?: string;
 };
 
 function resourceLabel(kind: MoneyResourceKind) {
@@ -40,6 +41,7 @@ export function MoneyResourceCreateDialog({
   onSubmit,
   error,
   pending = false,
+  description,
 }: MoneyResourceCreateDialogProps) {
   const label = resourceLabel(kind);
   const fieldId = `money-create-${kind}-name`;
@@ -51,7 +53,7 @@ export function MoneyResourceCreateDialog({
           <DialogHeader>
             <DialogTitle className="text-xl tracking-[-0.03em]">Create {label}</DialogTitle>
             <DialogDescription className="mt-2 leading-6">
-              Add a {label} without leaving this transaction.
+              {description ?? `Add a ${label} without leaving this transaction.`}
             </DialogDescription>
           </DialogHeader>
 

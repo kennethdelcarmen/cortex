@@ -1,11 +1,13 @@
 "use client";
 
-import { useInfiniteQuery, type QueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, type QueryClient } from "@tanstack/react-query";
 import {
   listMoneyAccounts,
+  listMoneyBudgets,
   listMoneyCategories,
   listMoneyPayees,
   listMoneyTransactions,
+  getMoneySummary,
   type MoneyCategory,
   type MoneyTransactionFilters,
 } from "./api";
@@ -100,6 +102,23 @@ export function useMoneyTransactions(filters: MoneyTransactionFilters) {
   });
 }
 
+export function useMoneyBudgets(period: string, currencyCode: string) {
+  return useInfiniteQuery({
+    queryKey: [...moneyBudgetsQueryKey, "list", { period, currencyCode }],
+    queryFn: ({ pageParam }: { pageParam: string }) =>
+      listMoneyBudgets({ period, currencyCode, cursor: pageParam, limit: 50 }),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
+export function useMoneySummary(period: string, currencyCode: string) {
+  return useQuery({
+    queryKey: [...moneySummaryQueryKey, period, currencyCode],
+    queryFn: () => getMoneySummary(period, currencyCode),
+  });
+}
+
 export function categoriesForKind(categories: MoneyCategory[], kind: "income" | "expense") {
   return categories.filter((category) => category.kind === kind && !category.archived_at);
 }
@@ -110,6 +129,13 @@ export function invalidateMoneyQueries(queryClient: QueryClient) {
     queryClient.invalidateQueries({ queryKey: moneyPayeesQueryKey }),
     queryClient.invalidateQueries({ queryKey: moneyCategoriesQueryKey }),
     queryClient.invalidateQueries({ queryKey: moneyTransactionsQueryKey }),
+    queryClient.invalidateQueries({ queryKey: moneyBudgetsQueryKey }),
+    queryClient.invalidateQueries({ queryKey: moneySummaryQueryKey }),
+  ]);
+}
+
+export function invalidateMoneyBudgetQueries(queryClient: QueryClient) {
+  return Promise.all([
     queryClient.invalidateQueries({ queryKey: moneyBudgetsQueryKey }),
     queryClient.invalidateQueries({ queryKey: moneySummaryQueryKey }),
   ]);

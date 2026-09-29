@@ -199,6 +199,15 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
     final_budget = await client.get(f"/api/v1/money/budgets/{budget.json()['id']}")
     assert final_budget.json()["spent_amount"] == "0.00"
 
+    deleted_budget = await client.delete(
+        f"/api/v1/money/budgets/{budget.json()['id']}",
+        headers=headers,
+    )
+    assert deleted_budget.status_code == 204, deleted_budget.text
+    missing_budget = await client.get(f"/api/v1/money/budgets/{budget.json()['id']}")
+    assert missing_budget.status_code == 404
+    assert missing_budget.json()["detail"]["code"] == "money_budget_not_found"
+
     listed = await client.get("/api/v1/money/transactions")
     assert [item["id"] for item in listed.json()["items"]] == [reversal.json()["id"]]
     all_transactions = await client.get(

@@ -168,6 +168,10 @@ export type MoneyTransactionInput = {
 
 export type MoneyTransactionUpdateInput = Partial<MoneyTransactionInput>;
 
+export type MoneyBudgetUpsertInput = {
+  amount: string;
+};
+
 export type MoneyTransactionFilters = {
   dateFrom?: string;
   dateTo?: string;
@@ -284,6 +288,26 @@ export function listMoneyTransactions(filters: MoneyTransactionFilters, cursor?:
 export function getMoneySummary(period: string, currencyCode = "PHP") {
   const params = new URLSearchParams({ period, currency_code: currencyCode });
   return apiFetch(`/api/v1/money/summary?${params}`, {}, moneySummarySchema);
+}
+
+export function upsertMoneyBudget(
+  period: string,
+  categoryId: string,
+  currencyCode: string,
+  payload: MoneyBudgetUpsertInput,
+) {
+  return apiFetch(
+    `/api/v1/money/budgets/${encodeURIComponent(period)}/${encodeURIComponent(categoryId)}/${encodeURIComponent(currencyCode)}`,
+    { method: "PUT", body: JSON.stringify(payload) },
+    moneyBudgetSchema,
+  );
+}
+
+export function deleteMoneyBudget(budgetId: string) {
+  return apiFetch<void>(
+    `/api/v1/money/budgets/${encodeURIComponent(budgetId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export function getMoneyAccount(accountId: string) {

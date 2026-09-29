@@ -184,18 +184,18 @@ function MoneySubNavigation() {
       >
         Accounts
       </Link>
-      <span
-        aria-disabled="true"
-        className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs text-muted-foreground/75"
+      <Link
+        href="/money/budgets"
+        aria-current={pathname.startsWith("/money/budgets") ? "page" : undefined}
+        className={cn(
+          "block rounded-md px-3 py-1.5 text-xs outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
+          pathname.startsWith("/money/budgets")
+            ? "bg-chart-4/10 font-medium text-foreground"
+            : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+        )}
       >
-        <span>Budgets</span>
-        <Badge
-          variant="outline"
-          className="h-4 border-border/80 px-1 font-mono text-[0.52rem] uppercase tracking-[0.08em] text-muted-foreground"
-        >
-          Next
-        </Badge>
-      </span>
+        Budgets
+      </Link>
     </nav>
   );
 }
