@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Check, Pencil, RotateCcw, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Check, CreditCard, Pencil, RotateCcw, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
@@ -10,9 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SelectItem, SelectSeparator } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { currentLocalDateInput } from "@/lib/date";
 import { cn } from "@/lib/utils";
 import {
   clearMoneyPosting,
+  createMoneyInstallmentPlan,
   createMoneyCategory,
   createMoneyPayee,
   createMoneyTransaction,
@@ -45,6 +47,7 @@ import { MoneySelectField } from "./money-select-field";
 type TransactionDrawerProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSaved?: () => void;
   transactionId?: string | null;
   defaultDate?: string;
   defaultCurrencyCode?: string;
@@ -52,6 +55,10 @@ type TransactionDrawerProps = {
   payees: MoneyPayee[];
   categories: MoneyCategory[];
 };
+
+type EntryMode = TransactionMode | "installment";
+
+const amountPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 function transactionDraft(transaction: MoneyTransaction, categories: MoneyCategory[]) {
   const mode = transactionMode(transaction, categories);
@@ -80,6 +87,7 @@ function transactionDraft(transaction: MoneyTransaction, categories: MoneyCatego
 export function TransactionDrawer({
   open,
   onOpenChange,
+  onSaved,
   transactionId,
   defaultDate,
   defaultCurrencyCode = "PHP",
@@ -90,8 +98,8 @@ export function TransactionDrawer({
   const queryClient = useQueryClient();
   const feedback = useFeedback();
   const [editing, setEditing] = useState(!transactionId);
-  const [mode, setMode] = useState<TransactionMode>("expense");
-  const [date, setDate] = useState(defaultDate ?? new Date().toISOString().slice(0, 10));
+  const [mode, setMode] = useState<EntryMode>("expense");
+  const [date, setDate] = useState(defaultDate ?? currentLocalDateInput());
   const [name, setName] = useState("");
   const [payeeId, setPayeeId] = useState("");
   const [memo, setMemo] = useState("");
@@ -99,6 +107,8 @@ export function TransactionDrawer({
   const [accountId, setAccountId] = useState("");
   const [destinationAccountId, setDestinationAccountId] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [termMonths, setTermMonths] = useState("12");
+  const [feeAmount, setFeeAmount] = useState("0");
   const [error, setError] = useState<string>();
   const [resourceDialogKind, setResourceDialogKind] = useState<MoneyResourceKind | null>(null);
   const [resourceDialogDisplayKind, setResourceDialogDisplayKind] = useState<MoneyResourceKind>("payee");
@@ -115,7 +125,9 @@ export function TransactionDrawer({
   const activeAccounts = useMemo(() => accounts.filter((account) => !account.archived_at), [accounts]);
   const selectedAccount = activeAccounts.find((account) => account.id === accountId);
   const selectedCurrency = selectedAccount?.currency_code ?? defaultCurrencyCode;
-  const modeCategories = mode === "transfer" ? [] : categoriesForKind(categories, mode);
+  const modeCategories = mode === "transfer"
+    ? []
+    : categoriesForKind(categories, mode === "income" ? "income" : "expense");
   const supportedEdit = transaction ? transactionMode(transaction, categories) !== null : false;
   const hasReconciledAccountPosting = transaction
     ? transactionAccountPostings(transaction).some((posting) => posting.reconciliation_state === "reconciled")
@@ -156,7 +168,7 @@ export function TransactionDrawer({
       if (!transactionId) {
         setEditing(true);
         setMode("expense");
-        setDate(defaultDate ?? new Date().toISOString().slice(0, 10));
+        setDate(defaultDate ?? currentLocalDateInput());
         setName("");
         setPayeeId("");
         setMemo("");
@@ -179,6 +191,7 @@ export function TransactionDrawer({
       return createMoneyTransaction(payload);
     },
   });
+  const installmentMutation = useMutation({ mutationFn: createMoneyInstallmentPlan });
   const postingMutation = useMutation({
     mutationFn: ({ action, postingId }: { action: "clear" | "reconcile"; postingId: string }) =>
       action === "clear"
@@ -187,7 +200,7 @@ export function TransactionDrawer({
   });
   const reverseMutation = useMutation({ mutationFn: () => reverseMoneyTransaction(transactionId ?? "") });
 
-  const pending = saveMutation.isPending || createPayeeMutation.isPending || createCategoryMutation.isPending;
+  const pending = saveMutation.isPending || installmentMutation.isPending || createPayeeMutation.isPending || createCategoryMutation.isPending;
 
   function handleResourceSelect(kind: MoneyResourceKind, value: string) {
     const createValue = kind === "payee" ? "__create_payee__" : "__create_category__";
@@ -246,9 +259,40 @@ export function TransactionDrawer({
       setError("Choose a category before saving.");
       return;
     }
+    if (mode === "installment" && sourceAccount?.account_type !== "credit_card") {
+      setError("Installment purchases must use a credit-card account.");
+      return;
+    }
+    if (mode === "installment" && (!/^\d+$/.test(termMonths) || Number(termMonths) < 1 || Number(termMonths) > 120)) {
+      setError("Choose an installment term between 1 and 120 months.");
+      return;
+    }
+    if (mode === "installment" && !amountPattern.test(feeAmount.trim())) {
+      setError("Enter a valid installment fee, such as 0 or 500.00.");
+      return;
+    }
 
     try {
       const currencyCode = sourceAccount.currency_code;
+      if (mode === "installment") {
+        await installmentMutation.mutateAsync({
+          account_id: sourceAccount.id,
+          currency_code: currencyCode,
+          purchase_date: date,
+          name: name.trim(),
+          payee_id: payeeId || null,
+          category_id: categoryId,
+          memo: memo.trim() || null,
+          total_amount: normalizedAmount,
+          fee_amount: feeAmount.trim() || "0",
+          term_months: Number(termMonths),
+        });
+        await invalidateMoneyQueries(queryClient);
+        feedback.success({ title: "Installment purchase scheduled.", description: "The card will be charged at each statement close." });
+        onSaved?.();
+        onOpenChange(false);
+        return;
+      }
       const postings = mode === "transfer"
         ? [
             { account_id: sourceAccount.id, currency_code: currencyCode, amount: `-${normalizedAmount}` },
@@ -275,6 +319,7 @@ export function TransactionDrawer({
       });
       await invalidateMoneyQueries(queryClient);
       feedback.success({ title: transactionId ? "Transaction updated." : "Transaction recorded." });
+      onSaved?.();
       onOpenChange(false);
     } catch (reason) {
       setError(describeMoneyError(reason));
@@ -349,9 +394,9 @@ export function TransactionDrawer({
         ) : (
           <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8">
-              <div className="grid grid-cols-3 gap-1 rounded-lg border border-border/80 bg-background p-1" role="group" aria-label="Transaction type">
-                {(["expense", "income", "transfer"] as TransactionMode[]).map((item) => {
-                  const Icon = item === "expense" ? ArrowUpRight : item === "income" ? ArrowDownLeft : ArrowLeftRight;
+              <div className="grid grid-cols-4 gap-1 rounded-lg border border-border/80 bg-background p-1" role="group" aria-label="Transaction type">
+                {(["expense", "income", "transfer", "installment"] as EntryMode[]).map((item) => {
+                  const Icon = item === "expense" ? ArrowUpRight : item === "income" ? ArrowDownLeft : item === "transfer" ? ArrowLeftRight : CreditCard;
                   return (
                     <Button
                       key={item}
@@ -365,7 +410,7 @@ export function TransactionDrawer({
                       }}
                     >
                       <Icon aria-hidden="true" />
-                      {describeTransactionMode(item)}
+                      {item === "installment" ? "Installment" : describeTransactionMode(item)}
                     </Button>
                   );
                 })}
@@ -421,6 +466,19 @@ export function TransactionDrawer({
                     <Label htmlFor="transaction-amount">Amount · {selectedCurrency}</Label>
                   <Input id="transaction-amount" className="h-11" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required />
                   </div>
+                  {mode === "installment" ? (
+                    <>
+                      <div className="flex flex-col gap-2 text-sm">
+                        <Label htmlFor="installment-term">Term in months</Label>
+                        <Input id="installment-term" className="h-11" inputMode="numeric" value={termMonths} onChange={(event) => setTermMonths(event.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="12" required />
+                      </div>
+                      <div className="flex flex-col gap-2 text-sm">
+                        <Label htmlFor="installment-fee">Fees included · {selectedCurrency}</Label>
+                        <Input id="installment-fee" className="h-11" inputMode="decimal" value={feeAmount} onChange={(event) => setFeeAmount(event.target.value)} placeholder="0.00" required />
+                      </div>
+                      <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">This records a purchase commitment. The card is charged one installment at each statement close; paying the card bill is tracked separately.</p>
+                    </>
+                  ) : null}
                 </div>
               )}
 

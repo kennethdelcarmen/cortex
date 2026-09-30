@@ -134,3 +134,31 @@ class ReversalNotAllowedError(MoneyError):
     status_code = 409
     code = "money_reversal_not_allowed"
     message = "Only a reconciled transaction can be reversed."
+
+
+class InvalidCreditCardSettingsError(MoneyError):
+    status_code = 422
+    code = "money_invalid_credit_card_settings"
+    message = "Credit-card limit and statement dates are required and must be valid."
+
+
+class InstallmentPlanNotFoundError(MoneyNotFoundError):
+    code = "money_installment_plan_not_found"
+    message = "The installment plan was not found."
+
+
+class InstallmentOccurrenceNotFoundError(MoneyNotFoundError):
+    code = "money_installment_occurrence_not_found"
+    message = "The installment occurrence was not found."
+
+
+class InvalidInstallmentPlanError(MoneyError):
+    status_code = 422
+    code = "money_invalid_installment_plan"
+    message = "The installment plan is invalid for the selected account or category."
+
+
+class InstallmentPlanLockedError(MoneyError):
+    status_code = 409
+    code = "money_installment_plan_locked"
+    message = "The installment plan cannot be changed after a charge has posted."

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+import calendar
 import hashlib
 import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from uuid import uuid4
 
 from sqlalchemy import delete, exists, func, or_, select
@@ -22,6 +23,10 @@ from .errors import (
     CategoryNotFoundError,
     CurrencyMismatchError,
     DuplicateMoneyNameError,
+    InstallmentPlanLockedError,
+    InstallmentPlanNotFoundError,
+    InvalidCreditCardSettingsError,
+    InvalidInstallmentPlanError,
     InvalidMoneyCursorError,
     InvalidMoneyQueryError,
     InvalidPostingTargetError,
@@ -39,11 +44,14 @@ from .models import (
     MoneyAccount,
     MoneyBudget,
     MoneyCategory,
+    MoneyInstallmentOccurrence,
+    MoneyInstallmentPlan,
     MoneyPayee,
     MoneyPosting,
     MoneyTransaction,
 )
 from .schemas import (
+    SUPPORTED_CURRENCY_EXPONENTS,
     AccountCreateRequest,
     AccountType,
     AccountUpdateRequest,
@@ -51,12 +59,16 @@ from .schemas import (
     CategoryCreateRequest,
     CategoryKind,
     CategoryUpdateRequest,
+    InstallmentOccurrenceState,
+    InstallmentPlanCreateRequest,
+    InstallmentPlanState,
     PayeeCreateRequest,
     PayeeUpdateRequest,
     PostingRequest,
     ReconciliationState,
     TransactionCreateRequest,
     TransactionReverseRequest,
+    TransactionState,
     TransactionUpdateRequest,
     canonical_amount,
     normalize_currency,
@@ -78,6 +90,13 @@ class AccountRecord:
     currency_code: str
     opening_balance: str
     balance: str
+    credit_limit: str | None
+    amount_owed: str | None
+    available_credit: str | None
+    statement_close_day: int | None
+    payment_due_day: int | None
+    next_statement_close_date: date | None
+    next_payment_due_date: date | None
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
@@ -154,6 +173,40 @@ class TransactionRecord:
 
 
 @dataclass(frozen=True)
+class InstallmentOccurrenceRecord:
+    id: str
+    sequence_number: int
+    charge_date: date
+    amount: str
+    status: InstallmentOccurrenceState
+    transaction_id: str | None
+    charged_at: datetime | None
+
+
+@dataclass(frozen=True)
+class InstallmentPlanRecord:
+    id: str
+    account_id: str
+    payee_id: str | None
+    category_id: str
+    currency_code: str
+    purchase_date: date
+    name: str
+    memo: str | None
+    total_amount: str
+    fee_amount: str
+    term_months: int
+    status: InstallmentPlanState
+    charged_count: int
+    next_charge_date: date | None
+    next_charge_amount: str | None
+    remaining_amount: str
+    occurrences: list[InstallmentOccurrenceRecord]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
 class AccountListFilters:
     include_archived: bool = False
     archived_only: bool = False
@@ -204,6 +257,14 @@ class TransactionListFilters:
 
 
 @dataclass(frozen=True)
+class InstallmentPlanListFilters:
+    account_id: str | None = None
+    status: InstallmentPlanState | None = None
+    limit: int = DEFAULT_LIMIT
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
 class AccountPage:
     items: list[AccountRecord]
     next_cursor: str | None
@@ -230,6 +291,12 @@ class BudgetPage:
 @dataclass(frozen=True)
 class TransactionPage:
     items: list[TransactionRecord]
+    next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class InstallmentPlanPage:
+    items: list[InstallmentPlanRecord]
     next_cursor: str | None
 
 
@@ -318,7 +385,54 @@ def _parse_updated_cursor(cursor: str, fingerprint: str) -> tuple[datetime, str]
         raise InvalidMoneyCursorError() from None
 
 
+def _month_date(year: int, month: int, day: int) -> date:
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def _shift_month(year: int, month: int, months: int) -> tuple[int, int]:
+    absolute_month = year * 12 + month - 1 + months
+    shifted_year, month_index = divmod(absolute_month, 12)
+    return shifted_year, month_index + 1
+
+
+def _month_date_offset(value: date, day: int, months: int) -> date:
+    year, month = _shift_month(value.year, value.month, months)
+    return _month_date(year, month, day)
+
+
+def _next_statement_close_date(
+    account: MoneyAccount, value: date, *, strictly_after: bool = False
+) -> date | None:
+    if account.statement_close_day is None:
+        return None
+    candidate = _month_date(value.year, value.month, account.statement_close_day)
+    if candidate < value or (strictly_after and candidate <= value):
+        candidate = _month_date_offset(candidate, account.statement_close_day, 1)
+    return candidate
+
+
+def _next_payment_due_date(account: MoneyAccount, close_date: date | None) -> date | None:
+    if close_date is None or account.payment_due_day is None:
+        return None
+    candidate = _month_date(close_date.year, close_date.month, account.payment_due_day)
+    if candidate <= close_date:
+        candidate = _month_date_offset(candidate, account.payment_due_day, 1)
+    return candidate
+
+
 def _account_record(account: MoneyAccount, balance: Decimal) -> AccountRecord:
+    is_card = account.account_type == AccountType.CREDIT_CARD.value
+    amount_owed: str | None = None
+    available_credit: str | None = None
+    next_close: date | None = None
+    next_due: date | None = None
+    credit_limit = account.credit_limit
+    if is_card and credit_limit is not None:
+        limit = _decimal(credit_limit)
+        amount_owed = _decimal_text(max(-balance, Decimal(0)), account.currency_code)
+        available_credit = _decimal_text(limit + balance, account.currency_code)
+        next_close = _next_statement_close_date(account, datetime.now(UTC).date())
+        next_due = _next_payment_due_date(account, next_close)
     return AccountRecord(
         id=account.id,
         name=account.name,
@@ -326,8 +440,19 @@ def _account_record(account: MoneyAccount, balance: Decimal) -> AccountRecord:
         institution_name=account.institution_name,
         last_four=account.last_four,
         currency_code=account.currency_code,
-        opening_balance=account.opening_balance,
+        opening_balance=(
+            _decimal_text(-_decimal(account.opening_balance), account.currency_code)
+            if is_card
+            else account.opening_balance
+        ),
         balance=_decimal_text(balance, account.currency_code),
+        credit_limit=credit_limit,
+        amount_owed=amount_owed,
+        available_credit=available_credit,
+        statement_close_day=account.statement_close_day,
+        payment_due_day=account.payment_due_day,
+        next_statement_close_date=next_close,
+        next_payment_due_date=next_due,
         created_at=_as_utc(account.created_at) or account.created_at,
         updated_at=_as_utc(account.updated_at) or account.updated_at,
         archived_at=_as_utc(account.archived_at),
@@ -384,6 +509,60 @@ def _transaction_record(
         created_at=_as_utc(transaction.created_at) or transaction.created_at,
         updated_at=_as_utc(transaction.updated_at) or transaction.updated_at,
         voided_at=_as_utc(transaction.voided_at),
+    )
+
+
+def _occurrence_record(occurrence: MoneyInstallmentOccurrence) -> InstallmentOccurrenceRecord:
+    return InstallmentOccurrenceRecord(
+        id=occurrence.id,
+        sequence_number=occurrence.sequence_number,
+        charge_date=occurrence.charge_date,
+        amount=occurrence.amount,
+        status=InstallmentOccurrenceState(occurrence.status),
+        transaction_id=occurrence.transaction_id,
+        charged_at=_as_utc(occurrence.charged_at),
+    )
+
+
+async def _installment_plan_record(
+    db: AsyncSession, plan: MoneyInstallmentPlan
+) -> InstallmentPlanRecord:
+    occurrences = list(
+        (
+            await db.execute(
+                select(MoneyInstallmentOccurrence)
+                .where(MoneyInstallmentOccurrence.plan_id == plan.id)
+                .order_by(MoneyInstallmentOccurrence.sequence_number.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    charged = [item for item in occurrences if item.status == InstallmentOccurrenceState.CHARGED]
+    scheduled = [
+        item for item in occurrences if item.status == InstallmentOccurrenceState.SCHEDULED
+    ]
+    remaining = sum((_decimal(item.amount) for item in scheduled), Decimal(0))
+    return InstallmentPlanRecord(
+        id=plan.id,
+        account_id=plan.account_id,
+        payee_id=plan.payee_id,
+        category_id=plan.category_id,
+        currency_code=plan.currency_code,
+        purchase_date=plan.purchase_date,
+        name=plan.name,
+        memo=plan.memo,
+        total_amount=plan.total_amount,
+        fee_amount=plan.fee_amount,
+        term_months=plan.term_months,
+        status=InstallmentPlanState(plan.status),
+        charged_count=len(charged),
+        next_charge_date=scheduled[0].charge_date if scheduled else None,
+        next_charge_amount=scheduled[0].amount if scheduled else None,
+        remaining_amount=_decimal_text(remaining, plan.currency_code),
+        occurrences=[_occurrence_record(item) for item in occurrences],
+        created_at=_as_utc(plan.created_at) or plan.created_at,
+        updated_at=_as_utc(plan.updated_at) or plan.updated_at,
     )
 
 
@@ -613,6 +792,11 @@ async def create_account(
     now = _utc_now()
     async with storage.session() as db:
         async with db.begin():
+            opening_balance = payload.opening_balance
+            if payload.account_type == AccountType.CREDIT_CARD:
+                opening_balance = _decimal_text(
+                    -_decimal(payload.opening_balance), payload.currency_code
+                )
             account = MoneyAccount(
                 id=str(uuid4()),
                 user_id=user_id,
@@ -621,7 +805,10 @@ async def create_account(
                 institution_name=payload.institution_name,
                 last_four=payload.last_four,
                 currency_code=normalize_currency(payload.currency_code),
-                opening_balance=payload.opening_balance,
+                opening_balance=opening_balance,
+                credit_limit=payload.credit_limit,
+                statement_close_day=payload.statement_close_day,
+                payment_due_day=payload.payment_due_day,
                 created_at=now,
                 updated_at=now,
             )
@@ -653,6 +840,24 @@ async def update_account(
                 account.institution_name = payload.institution_name
             if "last_four" in fields:
                 account.last_four = payload.last_four
+            card_fields = {"credit_limit", "statement_close_day", "payment_due_day"}
+            if fields & card_fields and account.account_type != AccountType.CREDIT_CARD.value:
+                raise InvalidCreditCardSettingsError()
+            if "credit_limit" in fields and payload.credit_limit is not None:
+                account.credit_limit = canonical_amount(
+                    payload.credit_limit, account.currency_code, allow_zero=False
+                )
+            if "statement_close_day" in fields:
+                account.statement_close_day = payload.statement_close_day
+            if "payment_due_day" in fields:
+                account.payment_due_day = payload.payment_due_day
+            if account.account_type == AccountType.CREDIT_CARD.value and fields & card_fields:
+                if (
+                    account.credit_limit is None
+                    or account.statement_close_day is None
+                    or account.payment_due_day is None
+                ):
+                    raise InvalidCreditCardSettingsError()
             if fields:
                 account.updated_at = now
             await db.flush()
@@ -1412,3 +1617,290 @@ async def reverse_transaction(
             db.add_all(reversal_postings)
             await db.flush()
             return _transaction_record(reversal, reversal_postings)
+
+
+async def _get_installment_plan(
+    db: AsyncSession, user_id: str, plan_id: str
+) -> MoneyInstallmentPlan:
+    plan = await db.scalar(
+        select(MoneyInstallmentPlan)
+        .where(MoneyInstallmentPlan.id == plan_id, MoneyInstallmentPlan.user_id == user_id)
+        .limit(1)
+    )
+    if plan is None:
+        raise InstallmentPlanNotFoundError()
+    return plan
+
+
+def _installment_amounts(total: Decimal, term_months: int, currency_code: str) -> list[str]:
+    if total <= 0:
+        raise InvalidInstallmentPlanError()
+    exponent = SUPPORTED_CURRENCY_EXPONENTS[normalize_currency(currency_code)]
+    unit = Decimal(1).scaleb(-exponent)
+    base = (total / term_months).quantize(unit, rounding=ROUND_DOWN)
+    if base < unit:
+        raise InvalidInstallmentPlanError()
+    amounts = [base for _ in range(term_months - 1)]
+    amounts.append(total - (base * (term_months - 1)))
+    return [_decimal_text(amount, currency_code) for amount in amounts]
+
+
+async def create_installment_plan(
+    storage: DatabaseStorage,
+    user_id: str,
+    payload: InstallmentPlanCreateRequest,
+) -> InstallmentPlanRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            account = await _get_account(db, user_id, payload.account_id, active_only=True)
+            if account.account_type != AccountType.CREDIT_CARD.value:
+                raise InvalidInstallmentPlanError()
+            if (
+                account.statement_close_day is None
+                or account.payment_due_day is None
+                or account.credit_limit is None
+            ):
+                raise InvalidCreditCardSettingsError()
+            if account.currency_code != payload.currency_code:
+                raise CurrencyMismatchError()
+            category = await _get_category(db, user_id, payload.category_id, active_only=True)
+            if category.kind != CategoryKind.EXPENSE.value:
+                raise InvalidInstallmentPlanError()
+            await _validate_payee(db, user_id, payload.payee_id)
+            amounts = _installment_amounts(
+                Decimal(payload.total_amount) + Decimal(payload.fee_amount),
+                payload.term_months,
+                payload.currency_code,
+            )
+            first_charge = _next_statement_close_date(
+                account, payload.purchase_date, strictly_after=True
+            )
+            if first_charge is None:
+                raise InvalidCreditCardSettingsError()
+            plan = MoneyInstallmentPlan(
+                id=str(uuid4()),
+                user_id=user_id,
+                account_id=account.id,
+                payee_id=payload.payee_id,
+                category_id=payload.category_id,
+                currency_code=payload.currency_code,
+                purchase_date=payload.purchase_date,
+                name=payload.name,
+                memo=payload.memo,
+                total_amount=payload.total_amount,
+                fee_amount=payload.fee_amount,
+                term_months=payload.term_months,
+                status=InstallmentPlanState.ACTIVE.value,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(plan)
+            await db.flush()
+            occurrences = [
+                MoneyInstallmentOccurrence(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    plan_id=plan.id,
+                    sequence_number=index + 1,
+                    charge_date=_month_date_offset(
+                        first_charge, account.statement_close_day, index
+                    ),
+                    amount=amount,
+                    status=InstallmentOccurrenceState.SCHEDULED.value,
+                )
+                for index, amount in enumerate(amounts)
+            ]
+            db.add_all(occurrences)
+            await db.flush()
+            return await _installment_plan_record(db, plan)
+
+
+async def get_installment_plan(
+    storage: DatabaseStorage, user_id: str, plan_id: str
+) -> InstallmentPlanRecord:
+    async with storage.session() as db:
+        plan = await _get_installment_plan(db, user_id, plan_id)
+        return await _installment_plan_record(db, plan)
+
+
+async def list_installment_plans(
+    storage: DatabaseStorage, user_id: str, filters: InstallmentPlanListFilters
+) -> InstallmentPlanPage:
+    _validate_limit(filters.limit)
+    fingerprint = _filter_fingerprint(filters)
+    async with storage.session() as db:
+        statement = select(MoneyInstallmentPlan).where(MoneyInstallmentPlan.user_id == user_id)
+        if filters.account_id is not None:
+            statement = statement.where(MoneyInstallmentPlan.account_id == filters.account_id)
+        if filters.status is not None:
+            statement = statement.where(MoneyInstallmentPlan.status == filters.status.value)
+        if filters.cursor:
+            payload = _decode_cursor(filters.cursor, fingerprint)
+            try:
+                cursor_date = date.fromisoformat(str(payload["purchase_date"]))
+                cursor_id = payload["id"]
+                if not isinstance(cursor_id, str) or not cursor_id:
+                    raise ValueError
+            except (KeyError, TypeError, ValueError):
+                raise InvalidMoneyCursorError() from None
+            statement = statement.where(
+                (MoneyInstallmentPlan.purchase_date < cursor_date)
+                | (
+                    (MoneyInstallmentPlan.purchase_date == cursor_date)
+                    & (MoneyInstallmentPlan.id < cursor_id)
+                )
+            )
+        statement = statement.order_by(
+            MoneyInstallmentPlan.purchase_date.desc(), MoneyInstallmentPlan.id.desc()
+        ).limit(filters.limit + 1)
+        plans = list((await db.execute(statement)).scalars().all())
+        next_cursor = None
+        if len(plans) > filters.limit:
+            plans.pop()
+            last = plans[-1]
+            next_cursor = _encode_cursor(
+                {
+                    "v": 1,
+                    "f": fingerprint,
+                    "purchase_date": last.purchase_date.isoformat(),
+                    "id": last.id,
+                }
+            )
+        return InstallmentPlanPage(
+            [await _installment_plan_record(db, plan) for plan in plans], next_cursor
+        )
+
+
+async def cancel_installment_plan(
+    storage: DatabaseStorage, user_id: str, plan_id: str
+) -> InstallmentPlanRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            plan = await _get_installment_plan(db, user_id, plan_id)
+            if plan.status == InstallmentPlanState.COMPLETED.value:
+                raise InstallmentPlanLockedError()
+            if plan.status != InstallmentPlanState.CANCELLED.value:
+                occurrences = list(
+                    (
+                        await db.execute(
+                            select(MoneyInstallmentOccurrence).where(
+                                MoneyInstallmentOccurrence.plan_id == plan.id,
+                                MoneyInstallmentOccurrence.status
+                                == InstallmentOccurrenceState.SCHEDULED.value,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for occurrence in occurrences:
+                    occurrence.status = InstallmentOccurrenceState.CANCELLED.value
+                plan.status = InstallmentPlanState.CANCELLED.value
+                plan.updated_at = now
+                await db.flush()
+            return await _installment_plan_record(db, plan)
+
+
+async def process_due_installments(
+    storage: DatabaseStorage,
+    user_id: str | None = None,
+    today: date | None = None,
+) -> int:
+    charge_date = today or datetime.now(UTC).date()
+    now = _utc_now()
+    processed = 0
+    async with storage.session() as db:
+        async with db.begin():
+            statement = (
+                select(MoneyInstallmentOccurrence)
+                .join(
+                    MoneyInstallmentPlan,
+                    MoneyInstallmentPlan.id == MoneyInstallmentOccurrence.plan_id,
+                )
+                .where(
+                    MoneyInstallmentOccurrence.status == InstallmentOccurrenceState.SCHEDULED.value,
+                    MoneyInstallmentOccurrence.charge_date <= charge_date,
+                )
+                .order_by(
+                    MoneyInstallmentOccurrence.charge_date.asc(),
+                    MoneyInstallmentOccurrence.sequence_number.asc(),
+                )
+            )
+            if user_id is not None:
+                statement = statement.where(MoneyInstallmentOccurrence.user_id == user_id)
+            occurrences = list((await db.execute(statement)).scalars().all())
+            for occurrence in occurrences:
+                plan = await db.scalar(
+                    select(MoneyInstallmentPlan)
+                    .where(MoneyInstallmentPlan.id == occurrence.plan_id)
+                    .limit(1)
+                )
+                if plan is None or plan.status != InstallmentPlanState.ACTIVE.value:
+                    occurrence.status = InstallmentOccurrenceState.CANCELLED.value
+                    continue
+                account = await db.scalar(
+                    select(MoneyAccount).where(MoneyAccount.id == plan.account_id).limit(1)
+                )
+                if account is None:
+                    raise AccountNotFoundError()
+                transaction_id = str(uuid4())
+                installment_label = (
+                    f"Installment {occurrence.sequence_number} of {plan.term_months}"
+                )
+                transaction = MoneyTransaction(
+                    id=transaction_id,
+                    user_id=plan.user_id,
+                    transaction_date=occurrence.charge_date,
+                    name=f"{plan.name} · {installment_label}"[:200],
+                    payee_id=plan.payee_id,
+                    memo=(f"{plan.memo} · {installment_label}" if plan.memo else installment_label)[
+                        :10_000
+                    ],
+                    state=TransactionState.POSTED.value,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(transaction)
+                await db.flush()
+                db.add_all(
+                    [
+                        MoneyPosting(
+                            id=str(uuid4()),
+                            user_id=plan.user_id,
+                            transaction_id=transaction_id,
+                            account_id=account.id,
+                            category_id=None,
+                            currency_code=plan.currency_code,
+                            amount=_decimal_text(-_decimal(occurrence.amount), plan.currency_code),
+                            reconciliation_state=ReconciliationState.UNCLEARED.value,
+                        ),
+                        MoneyPosting(
+                            id=str(uuid4()),
+                            user_id=plan.user_id,
+                            transaction_id=transaction_id,
+                            account_id=None,
+                            category_id=plan.category_id,
+                            currency_code=plan.currency_code,
+                            amount=occurrence.amount,
+                            reconciliation_state=ReconciliationState.UNCLEARED.value,
+                        ),
+                    ]
+                )
+                occurrence.status = InstallmentOccurrenceState.CHARGED.value
+                occurrence.transaction_id = transaction_id
+                occurrence.charged_at = now
+                plan.updated_at = now
+                processed += 1
+                remaining = await db.scalar(
+                    select(func.count(MoneyInstallmentOccurrence.id)).where(
+                        MoneyInstallmentOccurrence.plan_id == plan.id,
+                        MoneyInstallmentOccurrence.status
+                        == InstallmentOccurrenceState.SCHEDULED.value,
+                    )
+                )
+                if remaining == 0:
+                    plan.status = InstallmentPlanState.COMPLETED.value
+            await db.flush()
+    return processed

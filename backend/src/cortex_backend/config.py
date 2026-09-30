@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     file_converter_command: str = "soffice"
     file_ocr_command: str = "tesseract"
     file_ocr_language: str = Field(default="eng", pattern=r"^[A-Za-z0-9_+.-]{1,64}$")
+    embeddings_enabled: bool = False
+    embedding_model_cache_path: Path = Path("data/models")
+    embedding_batch_size: int = Field(default=16, ge=1, le=128)
+    embedding_poll_seconds: float = Field(default=1.0, gt=0)
+    embedding_lease_seconds: int = Field(default=300, gt=0)
+    embedding_max_attempts: int = Field(default=3, ge=1, le=10)
+    installment_charging_enabled: bool = True
+    installment_charging_poll_seconds: float = Field(default=60.0, gt=0)
     setup_secret: SecretStr | None = None
     cors_origins: list[str] = Field(default_factory=list)
 

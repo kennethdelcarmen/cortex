@@ -47,6 +47,9 @@ class MoneyAccount(Base):
     last_four: Mapped[str | None] = mapped_column(String(4), nullable=True)
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
     opening_balance: Mapped[str] = mapped_column(String(64), nullable=False, default="0")
+    credit_limit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    statement_close_day: Mapped[int | None] = mapped_column(nullable=True)
+    payment_due_day: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -161,6 +164,85 @@ class MoneyTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MoneyInstallmentPlan(Base):
+    """A purchase commitment that becomes card charges over statement cycles."""
+
+    __tablename__ = "money_installment_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'completed', 'cancelled')",
+            name="ck_money_installment_plans_status",
+        ),
+        CheckConstraint("term_months BETWEEN 1 AND 120", name="ck_money_installment_plans_term"),
+        CheckConstraint("length(currency_code) = 3", name="ck_money_installment_plans_currency"),
+        Index("ix_money_installment_plans_owner_account_status", "user_id", "account_id", "status"),
+        Index("ix_money_installment_plans_owner_purchase_date", "user_id", "purchase_date", "id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("money_accounts.id", ondelete="RESTRICT"), nullable=False
+    )
+    payee_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_payees.id", ondelete="RESTRICT"), nullable=True
+    )
+    category_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("money_categories.id", ondelete="RESTRICT"), nullable=False
+    )
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    total_amount: Mapped[str] = mapped_column(String(64), nullable=False)
+    fee_amount: Mapped[str] = mapped_column(String(64), nullable=False, default="0")
+    term_months: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MoneyInstallmentOccurrence(Base):
+    """One scheduled or posted statement charge for an installment plan."""
+
+    __tablename__ = "money_installment_occurrences"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('scheduled', 'charged', 'cancelled')",
+            name="ck_money_installment_occurrences_status",
+        ),
+        CheckConstraint("amount <> '0'", name="ck_money_installment_occurrences_amount"),
+        UniqueConstraint(
+            "plan_id", "sequence_number", name="uq_money_installment_occurrences_plan_sequence"
+        ),
+        Index(
+            "ix_money_installment_occurrences_owner_due_status",
+            "user_id",
+            "charge_date",
+            "status",
+        ),
+        Index("ix_money_installment_occurrences_plan_status", "plan_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    plan_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("money_installment_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_number: Mapped[int] = mapped_column(nullable=False)
+    charge_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(9), nullable=False, default="scheduled")
+    transaction_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_transactions.id", ondelete="SET NULL"), nullable=True
+    )
+    charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MoneyPosting(Base):

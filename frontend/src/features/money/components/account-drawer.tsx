@@ -50,6 +50,9 @@ export function AccountDrawer({
   const [lastFour, setLastFour] = useState("");
   const [currencyCode, setCurrencyCode] = useState("PHP");
   const [openingBalance, setOpeningBalance] = useState("0");
+  const [creditLimit, setCreditLimit] = useState("");
+  const [statementCloseDay, setStatementCloseDay] = useState("");
+  const [paymentDueDay, setPaymentDueDay] = useState("");
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -64,6 +67,9 @@ export function AccountDrawer({
       setLastFour(account?.last_four ?? "");
       setCurrencyCode(account?.currency_code ?? "PHP");
       setOpeningBalance(account?.opening_balance ?? "0");
+      setCreditLimit(account?.credit_limit ?? "");
+      setStatementCloseDay(account?.statement_close_day?.toString() ?? "");
+      setPaymentDueDay(account?.payment_due_day?.toString() ?? "");
     });
     return () => {
       cancelled = true;
@@ -84,6 +90,9 @@ export function AccountDrawer({
     const normalizedInstitution = institutionName.trim();
     const normalizedLastFour = lastFour.trim();
     const normalizedOpeningBalance = openingBalance.trim();
+    const normalizedCreditLimit = creditLimit.trim();
+    const normalizedStatementCloseDay = statementCloseDay.trim();
+    const normalizedPaymentDueDay = paymentDueDay.trim();
 
     if (!normalizedName) {
       setError("Enter an account name before saving.");
@@ -94,8 +103,22 @@ export function AccountDrawer({
       return;
     }
     if (!editing && !amountPattern.test(normalizedOpeningBalance)) {
-      setError("Enter a valid opening balance, such as 0 or -125.50.");
+      setError("Enter a valid opening amount, such as 0 or 125.50.");
       return;
+    }
+    if (accountType === "credit_card") {
+      if (!amountPattern.test(normalizedCreditLimit) || Number(normalizedCreditLimit) <= 0) {
+        setError("Enter a positive credit limit for this card.");
+        return;
+      }
+      if (!/^(?:[1-9]|[12]\d|3[01])$/.test(normalizedStatementCloseDay)) {
+        setError("Statement closing day must be between 1 and 31.");
+        return;
+      }
+      if (!/^(?:[1-9]|[12]\d|3[01])$/.test(normalizedPaymentDueDay)) {
+        setError("Payment due day must be between 1 and 31.");
+        return;
+      }
     }
 
     const payload: MoneyAccountCreateInput | MoneyAccountUpdateInput = editing
@@ -103,6 +126,11 @@ export function AccountDrawer({
           name: normalizedName,
           institution_name: normalizedInstitution || null,
           last_four: normalizedLastFour || null,
+          ...(accountType === "credit_card" ? {
+            credit_limit: normalizedCreditLimit,
+            statement_close_day: Number(normalizedStatementCloseDay),
+            payment_due_day: Number(normalizedPaymentDueDay),
+          } : {}),
         }
       : {
           name: normalizedName,
@@ -111,6 +139,11 @@ export function AccountDrawer({
           last_four: normalizedLastFour || null,
           currency_code: currencyCode,
           opening_balance: normalizedOpeningBalance,
+          ...(accountType === "credit_card" ? {
+            credit_limit: normalizedCreditLimit,
+            statement_close_day: Number(normalizedStatementCloseDay),
+            payment_due_day: Number(normalizedPaymentDueDay),
+          } : {}),
         };
 
     try {
@@ -219,7 +252,7 @@ export function AccountDrawer({
                 />
               </div>
 
-              {!editing ? (
+              {!editing && accountType !== "credit_card" ? (
                 <div className="flex flex-col gap-2 text-sm">
                   <Label htmlFor="account-opening-balance">Opening balance · {currencyCode}</Label>
                   <Input
@@ -233,6 +266,63 @@ export function AccountDrawer({
                   />
                 </div>
               ) : null}
+
+              {accountType === "credit_card" ? (
+                <>
+                  <div className="flex flex-col gap-2 text-sm">
+                    <Label htmlFor="account-credit-limit">Credit limit · {currencyCode}</Label>
+                    <Input
+                      id="account-credit-limit"
+                      className="h-11"
+                      value={creditLimit}
+                      onChange={(event) => setCreditLimit(event.target.value)}
+                      placeholder="100000.00"
+                      inputMode="decimal"
+                      disabled={pending}
+                    />
+                  </div>
+                  {!editing ? (
+                    <div className="flex flex-col gap-2 text-sm">
+                      <Label htmlFor="account-opening-balance">Amount owed · {currencyCode}</Label>
+                      <Input
+                        id="account-opening-balance"
+                        className="h-11"
+                        value={openingBalance}
+                        onChange={(event) => setOpeningBalance(event.target.value)}
+                        placeholder="0.00"
+                        inputMode="decimal"
+                        disabled={pending}
+                      />
+                    </div>
+                  ) : null}
+                  <div className="flex flex-col gap-2 text-sm">
+                    <Label htmlFor="account-statement-close-day">Statement closes on day</Label>
+                    <Input
+                      id="account-statement-close-day"
+                      className="h-11"
+                      value={statementCloseDay}
+                      onChange={(event) => setStatementCloseDay(event.target.value.replace(/\D/g, "").slice(0, 2))}
+                      placeholder="15"
+                      inputMode="numeric"
+                      maxLength={2}
+                      disabled={pending}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2 text-sm">
+                    <Label htmlFor="account-payment-due-day">Payment due on day</Label>
+                    <Input
+                      id="account-payment-due-day"
+                      className="h-11"
+                      value={paymentDueDay}
+                      onChange={(event) => setPaymentDueDay(event.target.value.replace(/\D/g, "").slice(0, 2))}
+                      placeholder="5"
+                      inputMode="numeric"
+                      maxLength={2}
+                      disabled={pending}
+                    />
+                  </div>
+                </>
+              ) : null}
             </div>
 
             {editing && account ? (
@@ -245,6 +335,18 @@ export function AccountDrawer({
                   <dt className="text-xs text-muted-foreground">Opening balance</dt>
                   <dd className="mt-1 font-mono font-medium">{formatMoney(account.opening_balance, account.currency_code)}</dd>
                 </div>
+                {account.account_type === "credit_card" ? (
+                  <>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Amount owed</dt>
+                      <dd className="mt-1 font-mono font-medium">{account.amount_owed ? formatMoney(account.amount_owed, account.currency_code) : "Not configured"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Available credit</dt>
+                      <dd className="mt-1 font-mono font-medium">{account.available_credit ? formatMoney(account.available_credit, account.currency_code) : "Not configured"}</dd>
+                    </div>
+                  </>
+                ) : null}
                 <div>
                   <dt className="text-xs text-muted-foreground">Account</dt>
                   <dd className="mt-1">{accountLabel(account)}</dd>

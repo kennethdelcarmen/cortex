@@ -24,6 +24,7 @@ from ..auth.service import (
     replace_mcp_api_key,
     revoke_mcp_api_key,
     setup_owner,
+    update_profile,
     validate_setup_secret,
 )
 from ..auth.throttling import LoginThrottle
@@ -42,6 +43,7 @@ from .schemas import (
     LoginRequest,
     McpApiKeyResponse,
     McpApiKeyUpdateRequest,
+    ProfileUpdateRequest,
     SetupRequest,
     UserResponse,
 )
@@ -57,7 +59,12 @@ def _raise_http(error: AuthError) -> None:
 
 
 def _user_response(user: UserRecord) -> UserResponse:
-    return UserResponse(id=user.id, email=user.email, created_at=user.created_at)
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        created_at=user.created_at,
+    )
 
 
 def _set_auth_cookies(response: Response, result: AuthResult, settings: Settings) -> None:
@@ -150,6 +157,7 @@ async def setup(
             storage,
             settings,
             str(payload.email),
+            payload.display_name,
             payload.password,
             request.headers.get("x-setup-secret"),
             payload.mcp_api_key,
@@ -189,6 +197,21 @@ async def current_user(
     """Return the authenticated owner without exposing credential data."""
 
     return _user_response(auth.user)
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_current_user(
+    payload: ProfileUpdateRequest,
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+) -> UserResponse:
+    """Update the authenticated owner's editable profile fields."""
+
+    try:
+        user = await update_profile(storage, auth.user.id, payload.display_name)
+    except AuthError as exc:
+        _raise_http(exc)
+    return _user_response(user)
 
 
 @router.get("/csrf", response_model=CsrfResponse)

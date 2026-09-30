@@ -1,5 +1,6 @@
 import type { TaskListFilters, TaskPriority } from "./api";
-import { ACTIVE_STATUSES, currentLocalDateInput, localDateToIso } from "./utils";
+import { currentLocalDateInput } from "@/lib/date";
+import { ACTIVE_STATUSES, localDateToIso } from "./utils";
 
 export const TASK_VIEWS = [
   "all",

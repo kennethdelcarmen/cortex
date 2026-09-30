@@ -33,6 +33,12 @@ export const moneyReconciliationStateSchema = z.enum([
   "cleared",
   "reconciled",
 ]);
+export const moneyInstallmentPlanStateSchema = z.enum(["active", "completed", "cancelled"]);
+export const moneyInstallmentOccurrenceStateSchema = z.enum([
+  "scheduled",
+  "charged",
+  "cancelled",
+]);
 
 export const moneyAccountSchema = z.object({
   id: z.string().min(1),
@@ -43,6 +49,13 @@ export const moneyAccountSchema = z.object({
   currency_code: z.string().length(3),
   opening_balance: z.string().min(1),
   balance: z.string().min(1),
+  credit_limit: z.string().nullable(),
+  amount_owed: z.string().nullable(),
+  available_credit: z.string().nullable(),
+  statement_close_day: z.number().int().nullable(),
+  payment_due_day: z.number().int().nullable(),
+  next_statement_close_date: z.string().nullable(),
+  next_payment_due_date: z.string().nullable(),
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
   archived_at: z.string().nullable(),
@@ -112,6 +125,42 @@ export const moneySummarySchema = z.object({
   budget_remaining_amount: z.string().min(1),
 });
 
+export const moneyInstallmentOccurrenceSchema = z.object({
+  id: z.string().min(1),
+  sequence_number: z.number().int().positive(),
+  charge_date: z.string().min(1),
+  amount: z.string().min(1),
+  status: moneyInstallmentOccurrenceStateSchema,
+  transaction_id: z.string().nullable(),
+  charged_at: z.string().nullable(),
+});
+
+export const moneyInstallmentPlanSchema = z.object({
+  id: z.string().min(1),
+  account_id: z.string().min(1),
+  payee_id: z.string().nullable(),
+  category_id: z.string().min(1),
+  currency_code: z.string().length(3),
+  purchase_date: z.string().min(1),
+  name: z.string().min(1),
+  memo: z.string().nullable(),
+  total_amount: z.string().min(1),
+  fee_amount: z.string().min(1),
+  term_months: z.number().int().positive(),
+  status: moneyInstallmentPlanStateSchema,
+  charged_count: z.number().int().nonnegative(),
+  next_charge_date: z.string().nullable(),
+  next_charge_amount: z.string().nullable(),
+  remaining_amount: z.string().min(1),
+  occurrences: z.array(moneyInstallmentOccurrenceSchema),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+});
+
+export const moneyInstallmentProcessSchema = z.object({
+  processed_count: z.number().int().nonnegative(),
+});
+
 const listResponse = <T extends z.ZodType>(itemSchema: T) =>
   z.object({
     items: z.array(itemSchema),
@@ -123,6 +172,7 @@ const moneyPayeeListSchema = listResponse(moneyPayeeSchema);
 const moneyCategoryListSchema = listResponse(moneyCategorySchema);
 const moneyBudgetListSchema = listResponse(moneyBudgetSchema);
 const moneyTransactionListSchema = listResponse(moneyTransactionSchema);
+const moneyInstallmentPlanListSchema = listResponse(moneyInstallmentPlanSchema);
 
 export type MoneyAccount = z.infer<typeof moneyAccountSchema>;
 export type MoneyPayee = z.infer<typeof moneyPayeeSchema>;
@@ -135,6 +185,9 @@ export type MoneyAccountType = z.infer<typeof moneyAccountTypeSchema>;
 export type MoneyCategoryKind = z.infer<typeof moneyCategoryKindSchema>;
 export type MoneyReconciliationState = z.infer<typeof moneyReconciliationStateSchema>;
 export type MoneyTransactionListPage = z.infer<typeof moneyTransactionListSchema>;
+export type MoneyInstallmentPlan = z.infer<typeof moneyInstallmentPlanSchema>;
+export type MoneyInstallmentOccurrence = z.infer<typeof moneyInstallmentOccurrenceSchema>;
+export type MoneyInstallmentPlanState = z.infer<typeof moneyInstallmentPlanStateSchema>;
 
 export type MoneyAccountCreateInput = {
   name: string;
@@ -143,12 +196,31 @@ export type MoneyAccountCreateInput = {
   last_four?: string | null;
   currency_code: string;
   opening_balance: string;
+  credit_limit?: string | null;
+  statement_close_day?: number | null;
+  payment_due_day?: number | null;
 };
 
 export type MoneyAccountUpdateInput = {
   name?: string;
   institution_name?: string | null;
   last_four?: string | null;
+  credit_limit?: string | null;
+  statement_close_day?: number | null;
+  payment_due_day?: number | null;
+};
+
+export type MoneyInstallmentPlanCreateInput = {
+  account_id: string;
+  currency_code: string;
+  purchase_date: string;
+  name: string;
+  payee_id?: string | null;
+  category_id: string;
+  memo?: string | null;
+  total_amount: string;
+  fee_amount: string;
+  term_months: number;
 };
 
 export type MoneyPostingInput = {
@@ -191,6 +263,7 @@ export const moneyCategoriesQueryKey = [...moneyQueryKey, "categories"] as const
 export const moneyBudgetsQueryKey = [...moneyQueryKey, "budgets"] as const;
 export const moneyTransactionsQueryKey = [...moneyQueryKey, "transactions"] as const;
 export const moneySummaryQueryKey = [...moneyQueryKey, "summary"] as const;
+export const moneyInstallmentPlansQueryKey = [...moneyQueryKey, "installment-plans"] as const;
 
 function addListParams(
   params: URLSearchParams,
@@ -288,6 +361,52 @@ export function listMoneyTransactions(filters: MoneyTransactionFilters, cursor?:
 export function getMoneySummary(period: string, currencyCode = "PHP") {
   const params = new URLSearchParams({ period, currency_code: currencyCode });
   return apiFetch(`/api/v1/money/summary?${params}`, {}, moneySummarySchema);
+}
+
+export function listMoneyInstallmentPlans(options: {
+  accountId?: string;
+  status?: MoneyInstallmentPlanState;
+  cursor?: string;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 100));
+  if (options.accountId) params.set("account_id", options.accountId);
+  if (options.status) params.set("status", options.status);
+  if (options.cursor) params.set("cursor", options.cursor);
+  return apiFetch(`/api/v1/money/installment-plans?${params}`, {}, moneyInstallmentPlanListSchema);
+}
+
+export function getMoneyInstallmentPlan(planId: string) {
+  return apiFetch(
+    `/api/v1/money/installment-plans/${encodeURIComponent(planId)}`,
+    {},
+    moneyInstallmentPlanSchema,
+  );
+}
+
+export function createMoneyInstallmentPlan(payload: MoneyInstallmentPlanCreateInput) {
+  return apiFetch(
+    "/api/v1/money/installment-plans",
+    { method: "POST", body: JSON.stringify(payload) },
+    moneyInstallmentPlanSchema,
+  );
+}
+
+export function cancelMoneyInstallmentPlan(planId: string) {
+  return apiFetch(
+    `/api/v1/money/installment-plans/${encodeURIComponent(planId)}/cancel`,
+    { method: "POST" },
+    moneyInstallmentPlanSchema,
+  );
+}
+
+export function processDueMoneyInstallments() {
+  return apiFetch(
+    "/api/v1/money/installment-plans/process-due",
+    { method: "POST" },
+    moneyInstallmentProcessSchema,
+  );
 }
 
 export function upsertMoneyBudget(

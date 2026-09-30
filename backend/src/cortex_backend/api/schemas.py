@@ -24,6 +24,7 @@ class ErrorResponse(BaseModel):
 
 class SetupRequest(BaseModel):
     email: EmailStr
+    display_name: str | None = Field(default=None, max_length=80)
     password: str = Field(min_length=12, max_length=128)
     mcp_api_key: str | None = Field(default=None, min_length=32, max_length=256)
     use_setup_secret_as_mcp_key: bool = False
@@ -45,9 +46,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=12, max_length=128)
 
 
+class ProfileUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, max_length=80)
+
+
 class UserResponse(BaseModel):
     id: str
     email: EmailStr
+    display_name: str | None
     created_at: datetime
 
 

@@ -12,11 +12,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 from time import perf_counter_ns
+from typing import Literal
 
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, select
 
+from ..config import Settings
+from ..embeddings.provider import EmbeddingProvider, LocalEmbeddingProvider
+from ..embeddings.service import process_embeddings_once
 from ..storage import SQLiteStorage
 from .evaluation import (
     DEFAULT_RECALL_K,
@@ -32,6 +36,16 @@ from .service import search_chunks
 
 
 @dataclass(frozen=True)
+class RetrievalMetrics:
+    """Quality and latency measurements for one retrieval channel."""
+
+    recall_at_k_value: float
+    mean_reciprocal_rank: float
+    median_latency_ms: float
+    p95_latency_ms: float
+
+
+@dataclass(frozen=True)
 class BenchmarkReport:
     """Aggregate quality and latency measurements for one benchmark run."""
 
@@ -41,13 +55,12 @@ class BenchmarkReport:
     query_count: int
     positive_query_count: int
     recall_at_k: int
-    recall_at_k_value: float
-    mean_reciprocal_rank: float
     negative_query_count: int
     negative_zero_result_count: int
     repetitions: int
-    median_latency_ms: float
-    p95_latency_ms: float
+    lexical: RetrievalMetrics
+    vector: RetrievalMetrics | None
+    hybrid: RetrievalMetrics | None
 
 
 def _percentile(values: Sequence[float], percentile: float) -> float:
@@ -65,59 +78,119 @@ async def run_benchmark(
     fixture: EvaluationFixture,
     *,
     repetitions: int,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> BenchmarkReport:
-    """Seed an isolated database and measure repeated retrieval calls."""
+    """Seed an isolated database and measure retrieval channels."""
 
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
-    storage = SQLiteStorage(database_path)
+    storage = SQLiteStorage(database_path, sqlite_vec_enabled=embedding_provider is not None)
     await storage.check_ready()
     try:
         await seed_fixture(storage, fixture)
-        evaluations: list[QueryEvaluation] = []
-        latencies_ms: list[float] = []
+        if embedding_provider is not None:
+            settings = Settings(
+                database_path=database_path,
+                embeddings_enabled=True,
+                embedding_batch_size=32,
+            )
+            while await process_embeddings_once(storage, embedding_provider, settings):
+                pass
+
+        channel_evaluations: dict[str, list[QueryEvaluation]] = {"lexical": []}
+        channel_latencies: dict[str, list[float]] = {"lexical": []}
+        if embedding_provider is not None:
+            channel_evaluations.update({"vector": [], "hybrid": []})
+            channel_latencies.update({"vector": [], "hybrid": []})
         for query in fixture.queries:
-            hits = await search_chunks(
+            owner_id = fixture_owner_id(query.owner)
+            lexical_hits = await search_chunks(
                 storage,
-                fixture_owner_id(query.owner),
+                owner_id,
                 query.query,
                 source_types=query.source_types,
                 limit=query.limit,
+                retrieval_mode="lexical",
             )
-            evaluations.append(evaluate_query(query, hits, recall_k=DEFAULT_RECALL_K))
+            channel_evaluations["lexical"].append(
+                evaluate_query(query, lexical_hits, recall_k=DEFAULT_RECALL_K)
+            )
 
             for _ in range(repetitions):
                 started = perf_counter_ns()
                 await search_chunks(
                     storage,
-                    fixture_owner_id(query.owner),
+                    owner_id,
                     query.query,
                     source_types=query.source_types,
                     limit=query.limit,
+                    retrieval_mode="lexical",
                 )
-                latencies_ms.append((perf_counter_ns() - started) / 1_000_000)
+                channel_latencies["lexical"].append((perf_counter_ns() - started) / 1_000_000)
+
+            if embedding_provider is not None:
+                semantic_query = query.semantic_query or query.query
+                for channel in ("vector", "hybrid"):
+                    mode: Literal["vector", "hybrid"] = (
+                        "vector" if channel == "vector" else "hybrid"
+                    )
+                    semantic_hits = await search_chunks(
+                        storage,
+                        owner_id,
+                        semantic_query,
+                        source_types=query.source_types,
+                        limit=query.limit,
+                        embedding_provider=embedding_provider,
+                        retrieval_mode=mode,
+                    )
+                    channel_evaluations[channel].append(
+                        evaluate_query(query, semantic_hits, recall_k=DEFAULT_RECALL_K)
+                    )
+                    for _ in range(repetitions):
+                        started = perf_counter_ns()
+                        await search_chunks(
+                            storage,
+                            owner_id,
+                            semantic_query,
+                            source_types=query.source_types,
+                            limit=query.limit,
+                            embedding_provider=embedding_provider,
+                            retrieval_mode=mode,
+                        )
+                        channel_latencies[channel].append((perf_counter_ns() - started) / 1_000_000)
 
         async with storage.session() as db:
             chunk_count = int(await db.scalar(select(func.count(ContentChunk.id))) or 0)
 
-        positive = [evaluation for evaluation in evaluations if evaluation.recall is not None]
-        negative = [evaluation for evaluation in evaluations if evaluation.recall is None]
-        recall = sum(evaluation.recall or 0 for evaluation in positive) / len(positive)
-        mrr = sum(evaluation.reciprocal_rank or 0 for evaluation in positive) / len(positive)
+        lexical_evaluations = channel_evaluations["lexical"]
+        negative = [evaluation for evaluation in lexical_evaluations if evaluation.recall is None]
+
+        def metrics(channel: str) -> RetrievalMetrics:
+            evaluations = channel_evaluations[channel]
+            positive = [evaluation for evaluation in evaluations if evaluation.recall is not None]
+            latencies = channel_latencies[channel]
+            return RetrievalMetrics(
+                recall_at_k_value=sum(evaluation.recall or 0 for evaluation in positive)
+                / len(positive),
+                mean_reciprocal_rank=sum(evaluation.reciprocal_rank or 0 for evaluation in positive)
+                / len(positive),
+                median_latency_ms=median(latencies),
+                p95_latency_ms=_percentile(latencies, 0.95),
+            )
+
         return BenchmarkReport(
             fixture_version=fixture.version,
             source_count=len(fixture.sources),
             chunk_count=chunk_count,
-            query_count=len(evaluations),
-            positive_query_count=len(positive),
+            query_count=len(lexical_evaluations),
+            positive_query_count=len(lexical_evaluations) - len(negative),
             recall_at_k=DEFAULT_RECALL_K,
-            recall_at_k_value=recall,
-            mean_reciprocal_rank=mrr,
             negative_query_count=len(negative),
             negative_zero_result_count=sum(evaluation.zero_results for evaluation in negative),
             repetitions=repetitions,
-            median_latency_ms=median(latencies_ms),
-            p95_latency_ms=_percentile(latencies_ms, 0.95),
+            lexical=metrics("lexical"),
+            vector=metrics("vector") if embedding_provider is not None else None,
+            hybrid=metrics("hybrid") if embedding_provider is not None else None,
         )
     finally:
         await storage.close()
@@ -126,21 +199,31 @@ async def run_benchmark(
 def format_report(report: BenchmarkReport) -> str:
     """Render one stable human-readable benchmark report."""
 
-    return "\n".join(
-        (
-            "FTS retrieval baseline",
-            f"fixture version: {report.fixture_version}",
-            f"sources: {report.source_count} | chunks: {report.chunk_count}",
-            f"queries: {report.query_count} | repetitions/query: {report.repetitions}",
-            f"recall@{report.recall_at_k}: {report.recall_at_k_value:.3f} "
-            f"({report.positive_query_count} positive queries)",
-            f"mean reciprocal rank: {report.mean_reciprocal_rank:.3f}",
-            f"negative queries with zero results: "
-            f"{report.negative_zero_result_count}/{report.negative_query_count}",
-            f"latency: median {report.median_latency_ms:.3f} ms | "
-            f"p95 {report.p95_latency_ms:.3f} ms",
+    lines = [
+        "Retrieval benchmark",
+        f"fixture version: {report.fixture_version}",
+        f"sources: {report.source_count} | chunks: {report.chunk_count}",
+        f"queries: {report.query_count} | repetitions/query: {report.repetitions}",
+        f"positive queries: {report.positive_query_count} | "
+        f"negative queries with zero results: "
+        f"{report.negative_zero_result_count}/{report.negative_query_count}",
+    ]
+    for name, metrics in (
+        ("lexical", report.lexical),
+        ("vector", report.vector),
+        ("hybrid", report.hybrid),
+    ):
+        if metrics is None:
+            continue
+        lines.extend(
+            (
+                f"{name}: recall@{report.recall_at_k} {metrics.recall_at_k_value:.3f} | "
+                f"MRR {metrics.mean_reciprocal_rank:.3f}",
+                f"{name} latency: median {metrics.median_latency_ms:.3f} ms | "
+                f"p95 {metrics.p95_latency_ms:.3f} ms",
+            )
         )
-    )
+    return "\n".join(lines)
 
 
 @contextmanager
@@ -177,6 +260,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=_default_fixture_path())
     parser.add_argument("--repetitions", type=int, default=20)
+    parser.add_argument(
+        "--semantic",
+        action="store_true",
+        help="also measure local FastEmbed vector and hybrid retrieval",
+    )
     return parser
 
 
@@ -193,6 +281,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 database_path,
                 fixture,
                 repetitions=args.repetitions,
+                embedding_provider=(
+                    LocalEmbeddingProvider(Path("data/models")) if args.semantic else None
+                ),
             )
         )
     print(format_report(report))

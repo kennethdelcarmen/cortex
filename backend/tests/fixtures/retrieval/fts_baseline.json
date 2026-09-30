@@ -55,6 +55,7 @@
       "id": "note-title-and-body",
       "owner": "owner-a",
       "query": "quarterly filing deadline",
+      "semantic_query": "When is the tax filing due?",
       "expected": [
         {
           "source_type": "note",
@@ -67,6 +68,7 @@
       "id": "note-body-terms",
       "owner": "owner-a",
       "query": "gather receipts",
+      "semantic_query": "What should I collect before submitting the estimate?",
       "source_types": ["note"],
       "expected": [
         {
@@ -80,6 +82,7 @@
       "id": "task-source-filter",
       "owner": "owner-a",
       "query": "quarterly tax forms",
+      "semantic_query": "Which tax paperwork needs to be submitted?",
       "source_types": ["task"],
       "expected": [
         {
@@ -93,6 +96,7 @@
       "id": "file-extracted-text",
       "owner": "owner-a",
       "query": "reimbursement expense receipt",
+      "semantic_query": "What documentation is required for travel refunds?",
       "source_types": ["file"],
       "expected": [
         {
@@ -106,6 +110,7 @@
       "id": "mixed-source-ranking",
       "owner": "owner-a",
       "query": "tax filing",
+      "semantic_query": "When should I submit taxes?",
       "limit": 5,
       "expected": [
         {

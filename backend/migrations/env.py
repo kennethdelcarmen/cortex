@@ -12,6 +12,7 @@ from cortex_backend.attachments import models as _attachment_models  # noqa: F40
 from cortex_backend.auth.models import Base
 from cortex_backend.chunking import models as _chunking_models  # noqa: F401
 from cortex_backend.config import Settings
+from cortex_backend.embeddings import models as _embedding_models  # noqa: F401
 from cortex_backend.files import models as _file_models  # noqa: F401
 from cortex_backend.logs import models as _activity_log_models  # noqa: F401
 from cortex_backend.memory import models as _memory_models  # noqa: F401

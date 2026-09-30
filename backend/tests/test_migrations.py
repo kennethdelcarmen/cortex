@@ -51,6 +51,7 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         assert user_columns == {
             "id",
             "email",
+            "display_name",
             "password_hash",
             "is_active",
             "is_owner",
@@ -231,6 +232,24 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         assert connection.execute(
             "SELECT type FROM sqlite_master WHERE name = 'content_chunks_fts'"
         ).fetchone() == ("table",)
+        embedding_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(content_chunk_embeddings)")
+        }
+        assert embedding_columns == {
+            "chunk_id",
+            "user_id",
+            "source_version",
+            "model_name",
+            "model_version",
+            "dimensions",
+            "status",
+            "attempts",
+            "available_at",
+            "lease_expires_at",
+            "last_error",
+            "created_at",
+            "updated_at",
+        }
 
         money_tables = {
             "money_accounts",
@@ -239,6 +258,8 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "money_budgets",
             "money_transactions",
             "money_postings",
+            "money_installment_plans",
+            "money_installment_occurrences",
         }
         assert money_tables <= tables
         assert {
@@ -250,6 +271,9 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "last_four",
             "currency_code",
             "opening_balance",
+            "credit_limit",
+            "statement_close_day",
+            "payment_due_day",
             "created_at",
             "updated_at",
             "archived_at",
@@ -306,6 +330,36 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "cleared_at",
             "reconciled_at",
         } == {row[1] for row in connection.execute("PRAGMA table_info(money_postings)")}
+        assert {
+            "id",
+            "user_id",
+            "account_id",
+            "payee_id",
+            "category_id",
+            "currency_code",
+            "purchase_date",
+            "name",
+            "memo",
+            "total_amount",
+            "fee_amount",
+            "term_months",
+            "status",
+            "created_at",
+            "updated_at",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_installment_plans)")}
+        assert {
+            "id",
+            "user_id",
+            "plan_id",
+            "sequence_number",
+            "charge_date",
+            "amount",
+            "status",
+            "transaction_id",
+            "charged_at",
+        } == {
+            row[1] for row in connection.execute("PRAGMA table_info(money_installment_occurrences)")
+        }
 
         indexes = {
             row[1]
@@ -359,6 +413,10 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_money_postings_owner_account_transaction",
             "ix_money_postings_owner_category_transaction",
             "ix_money_postings_owner_reconciliation",
+            "ix_money_installment_plans_owner_account_status",
+            "ix_money_installment_plans_owner_purchase_date",
+            "ix_money_installment_occurrences_owner_due_status",
+            "ix_money_installment_occurrences_plan_status",
         } <= indexes
 
         for table, parent_table in (
@@ -388,7 +446,64 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0017_money_transaction_names",
+            "0020_credit_card_installments",
+        )
+
+
+def test_embedding_migration_seeds_existing_chunks(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, "0018_owner_display_name")
+
+    timestamp = datetime.now(UTC).isoformat()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, display_name, password_hash, is_active, is_owner, created_at, "
+            "updated_at, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "user-embedding",
+                "embedding@example.com",
+                None,
+                "hash",
+                1,
+                1,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO content_chunks "
+            "(id, user_id, source_type, source_id, source_version, source_title, ordinal, "
+            "text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "chunk-embedding",
+                "user-embedding",
+                "note",
+                "note-embedding",
+                "source-v1",
+                "Embedding note",
+                0,
+                "Existing chunk text",
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT user_id, source_version, model_name, dimensions, status, attempts "
+            "FROM content_chunk_embeddings WHERE chunk_id = ?",
+            ("chunk-embedding",),
+        ).fetchone() == (
+            "user-embedding",
+            "source-v1",
+            "BAAI/bge-small-en-v1.5",
+            384,
+            "pending",
+            0,
         )
 
 
@@ -425,9 +540,7 @@ def test_transaction_name_migration_backfills_legacy_records(tmp_path, monkeypat
     upgrade_database(database_path, monkeypatch)
 
     with sqlite3.connect(database_path) as connection:
-        rows = connection.execute(
-            "SELECT id, name FROM money_transactions ORDER BY id"
-        ).fetchall()
+        rows = connection.execute("SELECT id, name FROM money_transactions ORDER BY id").fetchall()
         assert rows == [
             ("transaction-1", "Legacy payee"),
             ("transaction-2", "Trimmed memo"),

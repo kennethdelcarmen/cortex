@@ -20,6 +20,11 @@ from ..money.schemas import (
     CategoryListResponse,
     CategoryResponse,
     CategoryUpdateRequest,
+    InstallmentOccurrenceResponse,
+    InstallmentPlanCreateRequest,
+    InstallmentPlanListResponse,
+    InstallmentPlanResponse,
+    InstallmentProcessResponse,
     MoneySummaryResponse,
     PayeeCreateRequest,
     PayeeListResponse,
@@ -41,6 +46,8 @@ from ..money.service import (
     BudgetRecord,
     CategoryListFilters,
     CategoryRecord,
+    InstallmentPlanListFilters,
+    InstallmentPlanRecord,
     MoneySummaryRecord,
     PayeeListFilters,
     PayeeRecord,
@@ -49,23 +56,28 @@ from ..money.service import (
     archive_account,
     archive_category,
     archive_payee,
+    cancel_installment_plan,
     clear_posting,
     create_account,
     create_category,
+    create_installment_plan,
     create_payee,
     create_transaction,
     delete_budget,
     get_account,
     get_budget,
     get_category,
+    get_installment_plan,
     get_money_summary,
     get_payee,
     get_transaction,
     list_accounts,
     list_budgets,
     list_categories,
+    list_installment_plans,
     list_payees,
     list_transactions,
+    process_due_installments,
     reconcile_posting,
     restore_account,
     restore_category,
@@ -100,6 +112,13 @@ def _account_response(record: AccountRecord) -> AccountResponse:
         currency_code=record.currency_code,
         opening_balance=record.opening_balance,
         balance=record.balance,
+        credit_limit=record.credit_limit,
+        amount_owed=record.amount_owed,
+        available_credit=record.available_credit,
+        statement_close_day=record.statement_close_day,
+        payment_due_day=record.payment_due_day,
+        next_statement_close_date=record.next_statement_close_date,
+        next_payment_due_date=record.next_payment_due_date,
         created_at=record.created_at,
         updated_at=record.updated_at,
         archived_at=record.archived_at,
@@ -178,6 +197,41 @@ def _transaction_response(record: TransactionRecord) -> TransactionResponse:
         created_at=record.created_at,
         updated_at=record.updated_at,
         voided_at=record.voided_at,
+    )
+
+
+def _installment_plan_response(record: InstallmentPlanRecord) -> InstallmentPlanResponse:
+    return InstallmentPlanResponse(
+        id=record.id,
+        account_id=record.account_id,
+        payee_id=record.payee_id,
+        category_id=record.category_id,
+        currency_code=record.currency_code,
+        purchase_date=record.purchase_date,
+        name=record.name,
+        memo=record.memo,
+        total_amount=record.total_amount,
+        fee_amount=record.fee_amount,
+        term_months=record.term_months,
+        status=record.status,
+        charged_count=record.charged_count,
+        next_charge_date=record.next_charge_date,
+        next_charge_amount=record.next_charge_amount,
+        remaining_amount=record.remaining_amount,
+        occurrences=[
+            InstallmentOccurrenceResponse(
+                id=occurrence.id,
+                sequence_number=occurrence.sequence_number,
+                charge_date=occurrence.charge_date,
+                amount=occurrence.amount,
+                status=occurrence.status,
+                transaction_id=occurrence.transaction_id,
+                charged_at=occurrence.charged_at,
+            )
+            for occurrence in record.occurrences
+        ],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 
@@ -545,6 +599,101 @@ async def delete_budget_route(
     except MoneyError as exc:
         _raise_http(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/installment-plans",
+    response_model=InstallmentPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_installment_plan_route(
+    payload: InstallmentPlanCreateRequest,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> InstallmentPlanResponse:
+    try:
+        return _installment_plan_response(
+            await create_installment_plan(storage, auth.user.id, payload)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.get("/installment-plans", response_model=InstallmentPlanListResponse)
+async def list_installment_plans_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    account_id: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> InstallmentPlanListResponse:
+    from ..money.schemas import InstallmentPlanState
+
+    try:
+        parsed_status = InstallmentPlanState(status_filter) if status_filter else None
+        page = await list_installment_plans(
+            storage,
+            auth.user.id,
+            InstallmentPlanListFilters(
+                account_id=account_id,
+                status=parsed_status,
+                limit=limit,
+                cursor=cursor,
+            ),
+        )
+    except (MoneyError, ValueError) as exc:
+        if isinstance(exc, MoneyError):
+            _raise_http(exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "money_invalid_query", "message": "The money list query is invalid."},
+        ) from exc
+    return InstallmentPlanListResponse(
+        items=[_installment_plan_response(item) for item in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.post("/installment-plans/process-due", response_model=InstallmentProcessResponse)
+async def process_due_installments_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> InstallmentProcessResponse:
+    try:
+        return InstallmentProcessResponse(
+            processed_count=await process_due_installments(storage, auth.user.id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.get("/installment-plans/{plan_id}", response_model=InstallmentPlanResponse)
+async def get_installment_plan_route(
+    plan_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> InstallmentPlanResponse:
+    try:
+        return _installment_plan_response(
+            await get_installment_plan(storage, auth.user.id, plan_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post("/installment-plans/{plan_id}/cancel", response_model=InstallmentPlanResponse)
+async def cancel_installment_plan_route(
+    plan_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> InstallmentPlanResponse:
+    try:
+        return _installment_plan_response(
+            await cancel_installment_plan(storage, auth.user.id, plan_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
 
 
 @router.post(

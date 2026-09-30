@@ -57,6 +57,18 @@ class ReconciliationState(StrEnum):
     RECONCILED = "reconciled"
 
 
+class InstallmentPlanState(StrEnum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class InstallmentOccurrenceState(StrEnum):
+    SCHEDULED = "scheduled"
+    CHARGED = "charged"
+    CANCELLED = "cancelled"
+
+
 def normalize_name(value: str) -> str:
     normalized = " ".join(value.strip().split()).casefold()
     if not normalized:
@@ -126,6 +138,9 @@ class AccountCreateRequest(BaseModel):
     last_four: str | None = Field(default=None, pattern=r"^\d{4}$")
     currency_code: str = Field(min_length=3, max_length=3)
     opening_balance: str = "0"
+    credit_limit: str | None = None
+    statement_close_day: int | None = Field(default=None, ge=1, le=31)
+    payment_due_day: int | None = Field(default=None, ge=1, le=31)
 
     @field_validator("name")
     @classmethod
@@ -152,6 +167,19 @@ class AccountCreateRequest(BaseModel):
     def validate_balance(self) -> AccountCreateRequest:
         try:
             self.opening_balance = canonical_amount(self.opening_balance, self.currency_code)
+            if self.account_type == AccountType.CREDIT_CARD:
+                if self.credit_limit is None:
+                    raise ValueError("credit limit is required for credit cards")
+                self.credit_limit = canonical_amount(
+                    self.credit_limit, self.currency_code, allow_zero=False
+                )
+                if self.statement_close_day is None or self.payment_due_day is None:
+                    raise ValueError("statement and payment days are required for credit cards")
+            elif any(
+                value is not None
+                for value in (self.credit_limit, self.statement_close_day, self.payment_due_day)
+            ):
+                raise ValueError("credit-card settings are only valid for credit-card accounts")
         except (InvalidCurrencyError, InvalidMoneyAmountError) as exc:
             raise ValueError(exc.message) from exc
         return self
@@ -161,6 +189,9 @@ class AccountUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     institution_name: str | None = Field(default=None, max_length=200)
     last_four: str | None = Field(default=None, pattern=r"^\d{4}$")
+    credit_limit: str | None = None
+    statement_close_day: int | None = Field(default=None, ge=1, le=31)
+    payment_due_day: int | None = Field(default=None, ge=1, le=31)
 
     @field_validator("name")
     @classmethod
@@ -299,6 +330,55 @@ class TransactionReverseRequest(BaseModel):
         return normalized or None
 
 
+class InstallmentPlanCreateRequest(BaseModel):
+    account_id: str
+    currency_code: str = Field(min_length=3, max_length=3)
+    purchase_date: date
+    name: str = Field(min_length=1, max_length=200)
+    payee_id: str | None = None
+    category_id: str
+    memo: str | None = Field(default=None, max_length=10_000)
+    total_amount: str
+    fee_amount: str = "0"
+    term_months: int = Field(ge=1, le=120)
+
+    @field_validator("currency_code")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        try:
+            return normalize_currency(value)
+        except InvalidCurrencyError as exc:
+            raise ValueError(exc.message) from exc
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return normalize_transaction_name(value)
+
+    @field_validator("memo")
+    @classmethod
+    def validate_memo(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_amounts(self) -> InstallmentPlanCreateRequest:
+        try:
+            self.total_amount = canonical_amount(
+                self.total_amount, self.currency_code, allow_zero=False
+            )
+            self.fee_amount = canonical_amount(self.fee_amount, self.currency_code)
+            if Decimal(self.total_amount) <= 0:
+                raise ValueError("total amount must be positive")
+            if Decimal(self.fee_amount) < 0:
+                raise ValueError("fee amount cannot be negative")
+        except (InvalidCurrencyError, InvalidMoneyAmountError) as exc:
+            raise ValueError(exc.message) from exc
+        return self
+
+
 class AccountResponse(BaseModel):
     id: str
     name: str
@@ -308,6 +388,13 @@ class AccountResponse(BaseModel):
     currency_code: str
     opening_balance: str
     balance: str
+    credit_limit: str | None
+    amount_owed: str | None
+    available_credit: str | None
+    statement_close_day: int | None
+    payment_due_day: int | None
+    next_statement_close_date: date | None
+    next_payment_due_date: date | None
     created_at: datetime
     updated_at: datetime
     archived_at: datetime | None
@@ -400,3 +487,44 @@ class BudgetListResponse(BaseModel):
 class TransactionListResponse(BaseModel):
     items: list[TransactionResponse]
     next_cursor: str | None
+
+
+class InstallmentOccurrenceResponse(BaseModel):
+    id: str
+    sequence_number: int
+    charge_date: date
+    amount: str
+    status: InstallmentOccurrenceState
+    transaction_id: str | None
+    charged_at: datetime | None
+
+
+class InstallmentPlanResponse(BaseModel):
+    id: str
+    account_id: str
+    payee_id: str | None
+    category_id: str
+    currency_code: str
+    purchase_date: date
+    name: str
+    memo: str | None
+    total_amount: str
+    fee_amount: str
+    term_months: int
+    status: InstallmentPlanState
+    charged_count: int
+    next_charge_date: date | None
+    next_charge_amount: str | None
+    remaining_amount: str
+    occurrences: list[InstallmentOccurrenceResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class InstallmentPlanListResponse(BaseModel):
+    items: list[InstallmentPlanResponse]
+    next_cursor: str | None
+
+
+class InstallmentProcessResponse(BaseModel):
+    processed_count: int

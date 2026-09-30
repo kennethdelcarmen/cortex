@@ -209,6 +209,14 @@ export function listTasks(
   );
 }
 
+export function getTask(taskId: string) {
+  return apiFetch(
+    `/api/v1/tasks/${encodeURIComponent(taskId)}`,
+    {},
+    taskSchema,
+  );
+}
+
 export function getTaskSummary(timezone: string) {
   const params = new URLSearchParams({ timezone });
 

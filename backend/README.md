@@ -14,8 +14,9 @@ The current backend implements a persistent SQLite foundation and a local-owner
 authentication slice. There is not yet a Compose configuration, container
 image, or full domain functionality. Turso/libSQL, hosted services, mobile
 synchronization, external identity providers, password recovery, agent tokens,
-and semantic vector storage are optional or deferred rather than current
-backend requirements.
+and hosted embedding providers are optional rather than core backend
+requirements. Local semantic retrieval is available as an opt-in capability
+described below.
 
 ## Minimum system requirements
 
@@ -81,8 +82,51 @@ files; soft-deleted links remain durable for restore and permanent file deletion
 cleans them up.
 Migration `0015_content_chunking` adds deterministic owner-scoped chunks for
 notes, materialized tasks, and extracted file text, plus an internal SQLite FTS5
-index. Chunk rows are maintained transactionally by source writes and file
-processing; no embeddings or public chunk API are included yet.
+index. Migration `0019_content_chunk_embeddings` adds durable embedding-job
+state for those chunks. Chunk rows and pending embedding records are maintained
+transactionally by source writes and file processing; neither chunks nor
+embeddings have a public REST API.
+
+## Optional local semantic retrieval
+
+The default retrieval path remains SQLite FTS5. To enable local semantic
+retrieval, install the normal backend dependencies and set:
+
+```bash
+CORTEX_EMBEDDINGS_ENABLED=true
+CORTEX_EMBEDDING_MODEL_CACHE_PATH=data/models
+CORTEX_EMBEDDING_BATCH_SIZE=16
+CORTEX_EMBEDDING_POLL_SECONDS=1.0
+CORTEX_EMBEDDING_LEASE_SECONDS=300
+CORTEX_EMBEDDING_MAX_ATTEMPTS=3
+```
+
+The worker uses FastEmbed with `BAAI/bge-small-en-v1.5` and stores normalized
+384-dimensional vectors in the optional `sqlite-vec` index. The model is
+English-only in v1. Model files are downloaded lazily into the configured cache
+directory on first use, so the service needs network access once unless the
+cache is pre-populated. Source writes never wait for inference; they enqueue
+durable pending jobs and the restart-safe worker claims them in leased batches.
+
+For an existing database, run the resumable embedding backfill after applying
+migrations:
+
+```bash
+uv run cortex-embeddings-backfill
+# Or override paths for a one-off run:
+uv run cortex-embeddings-backfill \
+  --database-path /var/lib/cortex/cortex.db \
+  --cache-path /var/lib/cortex/models \
+  --batch-size 32
+```
+
+The command is safe to rerun. The vector table is derived and rebuildable; the
+durable embedding records are the source of indexing work. If FastEmbed, the
+model, or sqlite-vec is unavailable, the worker degrades and MCP grounding
+falls back to owner-scoped FTS5 retrieval. `/readyz` reports the capability as
+degraded without taking the core service offline. Disable the feature with
+`CORTEX_EMBEDDINGS_ENABLED=false` to roll back application behavior while
+leaving additive job and vector tables in place.
 
 File processing runs in a restart-safe local worker. Configure
 `CORTEX_FILE_PROCESSING_ENABLED`, `CORTEX_FILE_PROCESSING_POLL_SECONDS`,
@@ -161,17 +205,31 @@ strings, calendar dates, and account/category postings that must balance to
 zero independently for each supported currency. Account balances and budget
 spending are calculated from the posting ledger; credentials and full account
 numbers are never stored. Reconciled postings are immutable and corrected with
-the transaction reversal action. Matching authenticated MCP tools use the same
-service functions as REST.
+the transaction reversal action. Credit-card accounts also store a credit limit,
+statement closing day, and payment due day; their amount owed and available
+credit are derived from the signed posting balance. Migration
+`0020_credit_card_installments` adds installment purchase plans and scheduled
+statement occurrences. Creating an installment plan does not post a ledger
+transaction. The restart-safe worker posts each scheduled occurrence as a
+normal card expense at its statement close, with an idempotent generated name
+such as `Installment 3 of 12`. Card payments remain ordinary account-to-account
+transfers and never change a plan's charged-month count. Future occurrences can
+be cancelled without reversing historical charges. Configure the worker with
+`CORTEX_INSTALLMENT_CHARGING_ENABLED` and
+`CORTEX_INSTALLMENT_CHARGING_POLL_SECONDS`. Matching authenticated MCP tools use
+the same service functions as REST.
 
-## Internal retrieval contract and FTS baseline
+## Internal retrieval contract and hybrid retrieval
 
 `cortex_backend.chunking.service.search_chunks` is the current internal
 retrieval contract for future RAG workflows. It returns ranked text chunks with
 their source type, source ID, source version, title, ordinal, and file aliases.
-Each result has a one-based `rank` and a higher-is-better `score` derived from
-SQLite FTS5's BM25 score. The rank is the stable ordering signal; scores are
-diagnostic and should not be compared across different indexes or retrievers.
+Each result has a one-based `rank` and a higher-is-better `score`. With
+embeddings disabled or unavailable, the score is derived from SQLite FTS5's
+BM25 score. With semantic retrieval active, the score is reciprocal-rank
+fusion of lexical and vector candidates using `k=60`; `rank` remains the stable
+ordering signal. Lexical and vector diagnostics are retained internally for
+evaluation.
 
 Queries are trimmed, Unicode case-folded, split into word tokens, and matched
 with AND semantics: every token must be present in a chunk. Empty and
@@ -180,10 +238,11 @@ characters and result limits range from 1 to 100. Results are owner-scoped,
 exclude soft-deleted notes, tasks, and files, and use deterministic
 source/chunk tie-breakers after FTS relevance ordering.
 
-The current baseline is lexical SQLite FTS5 retrieval only. It does not create
-embeddings, call an LLM, synthesize answers, or expose a REST retrieval
-endpoint. External agents can use the authenticated MCP preparation tool
-described below.
+FTS5 remains the exact-term channel and fallback. Semantic candidates are
+generated from the local vector index, then fused with lexical candidates while
+preserving owner isolation, source filters, and soft-delete checks. Retrieval
+does not call an LLM, synthesize answers, or expose a REST search endpoint.
+External agents can use the authenticated MCP preparation tool described below.
 
 ## Internal RAG context assembly
 
@@ -191,7 +250,8 @@ described below.
 after `search_chunks`. In simple terms, retrieval finds possible answers, while
 context assembly chooses the useful pieces to show to a future AI model.
 
-The assembler accepts the user's question and the already-ranked FTS chunks. It
+The assembler accepts the user's question and the already-ranked lexical or
+hybrid chunks. It
 keeps the best passages in rank order up to a 6,000-character default budget.
 The budget counts the formatted citation and source labels as well as passage
 text, so the returned `context_text` stays within the requested limit. A
@@ -237,11 +297,12 @@ isolation. Run its repeatable quality and latency report from `backend/` with:
 uv run python -m cortex_backend.chunking.benchmark
 ```
 
-The report measures recall@5, mean reciprocal rank, negative-query empty-result
-coverage, and median/p95 service-call latency. Latency is reported for
-comparison and is not used as a machine-dependent test threshold. Change the
-number of timing repetitions with `--repetitions`, or provide another fixture
-with `--fixture`.
+The default report measures the lexical FTS5 channel. Add `--semantic` to
+download/use the configured local FastEmbed model and report lexical, vector,
+and hybrid recall@5, mean reciprocal rank, negative-query empty-result
+coverage, and median/p95 latency. Semantic latency is reported for comparison
+and is not used as a machine-dependent CI threshold. Change timing repetitions
+with `--repetitions`, or provide another fixture with `--fixture`.
 
 The service does not run Alembic automatically. When file processing is
 enabled, `/readyz` remains unavailable until the database and file-processing
@@ -408,13 +469,13 @@ uv run mypy src
 ```
 
 The backend now has a persistent SQLite storage foundation, versioned auth,
-task, recurrence, activity-log, notes, immutable file-context, and content-
-chunk schemas, local-owner authentication, and shared REST/MCP domain slices.
-Knowledge retrieval APIs, embeddings, finance, and self-hosting packaging
-remain deferred. To roll back the application after additive file-context or
-chunking migrations, deploy the previous application while leaving the new
-tables and derived artifacts in place. Only run a downgrade against a backed-
-up local database when intentionally removing these schemas; restore the
-database, raw files, and derived artifacts as one backup set.
+task, recurrence, activity-log, notes, immutable file-context, content-chunk,
+and optional local-embedding schemas, local-owner authentication, and shared
+REST/MCP domain slices. To roll back the application after additive
+file-context, chunking, or embedding migrations, deploy the previous
+application with embeddings disabled while leaving the new tables and derived
+artifacts in place. Only run a downgrade against a backed-up local database
+when intentionally removing these schemas; restore the database, raw files,
+and derived artifacts as one backup set.
 Use `uv run alembic downgrade 0001_auth_foundation` only when intentionally
 removing the task, recurrence, activity-log, notes, and file schemas together.

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Building2, Landmark, LoaderCircle, RotateCcw, Search, Trash2, WalletCards } from "lucide-react";
+import { Building2, CreditCard, Landmark, LoaderCircle, RotateCcw, Search, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useFeedback } from "@/components/feedback";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +89,8 @@ function AccountRow({
   onArchive: () => void;
   onRestore: () => void;
 }) {
-  const Icon = account.account_type === "cash" ? WalletCards : Building2;
+  const Icon = account.account_type === "credit_card" ? CreditCard : account.account_type === "cash" ? WalletCards : Building2;
+  const primaryAmount = account.account_type === "credit_card" ? account.amount_owed : account.balance;
   const summary = (
     <>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-primary-strong">
@@ -106,10 +107,12 @@ function AccountRow({
       </span>
       <span className="shrink-0 text-right">
         <span className={cn("block font-mono text-sm font-medium", archived && "text-muted-foreground")}>
-          {formatMoney(account.balance, account.currency_code)}
+          {primaryAmount ? formatMoney(primaryAmount, account.currency_code) : "Not configured"}
         </span>
         <span className="mt-1 block font-mono text-[0.62rem] uppercase tracking-[0.08em] text-muted-foreground">
-          {account.currency_code}
+          {account.account_type === "credit_card" && account.credit_limit
+            ? `${formatMoney(account.available_credit ?? "0", account.currency_code)} available`
+            : account.currency_code}
         </span>
       </span>
     </>

@@ -16,9 +16,10 @@ import { captureOptions } from "../workspace-config";
 
 type CaptureMenuProps = {
   compact?: boolean;
+  onSelect?: (key: (typeof captureOptions)[number]["key"]) => void;
 };
 
-export function CaptureMenu({ compact = false }: CaptureMenuProps) {
+export function CaptureMenu({ compact = false, onSelect }: CaptureMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -59,7 +60,8 @@ export function CaptureMenu({ compact = false }: CaptureMenuProps) {
             return (
               <DropdownMenuItem
                 key={option.key}
-                disabled
+                disabled={!onSelect}
+                onClick={() => onSelect?.(option.key)}
                 className="flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm text-muted-foreground opacity-75 data-[highlighted]:bg-muted"
               >
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary-strong">
@@ -69,9 +71,11 @@ export function CaptureMenu({ compact = false }: CaptureMenuProps) {
                   <span className="block font-medium text-foreground">{option.label}</span>
                   <span className="block truncate text-xs leading-5">{option.description}</span>
                 </span>
-                <span className="shrink-0 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-muted-foreground">
-                  Coming next
-                </span>
+                {!onSelect ? (
+                  <span className="shrink-0 font-mono text-[0.6rem] uppercase tracking-[0.12em] text-muted-foreground">
+                    Coming next
+                  </span>
+                ) : null}
               </DropdownMenuItem>
             );
           })}

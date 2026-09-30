@@ -36,6 +36,7 @@ import {
   createTask,
   deleteTask,
   endTaskSeries,
+  getTask,
   getTaskSeries,
   getTaskSummary,
   listTasks,
@@ -347,6 +348,10 @@ export function TasksPage({ email }: { email: string }) {
   );
 
   const searchParamsValue = searchParams.toString();
+  const requestedTaskId = useMemo(
+    () => new URLSearchParams(searchParamsValue).get("task")?.trim() || null,
+    [searchParamsValue],
+  );
   const urlState = useMemo<TaskUrlState>(
     () => parseTaskUrlState(new URLSearchParams(searchParamsValue)),
     [searchParamsValue],
@@ -406,6 +411,12 @@ export function TasksPage({ email }: { email: string }) {
     initialPageParam: "",
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: urlState.layout === "calendar",
+  });
+
+  const requestedTaskQuery = useQuery({
+    queryKey: [...taskQueryKey, "detail", requestedTaskId ?? "none"],
+    queryFn: () => getTask(requestedTaskId ?? ""),
+    enabled: Boolean(requestedTaskId),
   });
 
   const updateTaskUrl = useCallback(
@@ -560,8 +571,10 @@ export function TasksPage({ email }: { email: string }) {
     return orderTasks(filtered, selectedTab === "all");
   }, [selectedTab, visibleTasks]);
 
-  const selectedTask = detailsTaskId
-    ? [...visibleTasks, ...tasks, ...calendarTasks].find((task) => task.id === detailsTaskId) ?? null
+  const activeDetailsTaskId = requestedTaskId ?? detailsTaskId;
+  const selectedTask = activeDetailsTaskId
+    ? [...visibleTasks, ...tasks, ...calendarTasks].find((task) => task.id === activeDetailsTaskId) ??
+      (requestedTaskQuery.data?.id === activeDetailsTaskId ? requestedTaskQuery.data : null)
     : null;
   const [seriesEditOpen, setSeriesEditOpen] = useState(false);
   const [seriesAction, setSeriesAction] = useState<"end" | "skip" | null>(null);
@@ -569,7 +582,7 @@ export function TasksPage({ email }: { email: string }) {
   const seriesQuery = useQuery({
     queryKey: [...taskSeriesQueryKey, selectedTask?.series_id ?? "none"],
     queryFn: () => getTaskSeries(selectedTask?.series_id ?? ""),
-    enabled: Boolean(selectedTask?.series_id && detailsDrawerOpen),
+    enabled: Boolean(selectedTask?.series_id && (detailsDrawerOpen || requestedTaskId)),
   });
 
   function getCachedTask(taskId: string) {
@@ -854,6 +867,7 @@ export function TasksPage({ email }: { email: string }) {
     setDetailsDrawerOpen(open);
     if (!open) {
       setDetailsTaskId(null);
+      updateTaskUrl((params) => params.delete("task"), true);
     }
   }
 
@@ -922,12 +936,12 @@ export function TasksPage({ email }: { email: string }) {
   }
 
   async function saveTaskField(field: TaskEditableField, payload: TaskUpdateInput): Promise<void> {
-    if (!detailsTaskId) {
+    if (!activeDetailsTaskId) {
       throw new Error("No task is selected.");
     }
 
     await taskUpdateMutation.mutateAsync({
-      taskId: detailsTaskId,
+      taskId: activeDetailsTaskId,
       field,
       payload,
       notify: false,
@@ -1181,8 +1195,8 @@ export function TasksPage({ email }: { email: string }) {
         onSubmit={handleCreate}
       />
       <TaskDetailsDrawer
-        key={`details-${detailsDrawerOpen ? "open" : "closed"}-${detailsTaskId ?? "none"}`}
-        open={detailsDrawerOpen && Boolean(selectedTask)}
+        key={`details-${detailsDrawerOpen || Boolean(requestedTaskId) ? "open" : "closed"}-${activeDetailsTaskId ?? "none"}`}
+        open={(detailsDrawerOpen || Boolean(requestedTaskId)) && Boolean(selectedTask)}
         task={selectedTask}
         availableTags={tagCatalog}
         onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}

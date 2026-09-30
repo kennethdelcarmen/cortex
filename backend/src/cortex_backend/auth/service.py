@@ -38,6 +38,7 @@ from .throttling import LoginThrottle
 class UserRecord:
     id: str
     email: str
+    display_name: str | None
     created_at: datetime
 
 
@@ -76,6 +77,15 @@ def normalize_email(value: str) -> str:
     return value.strip().casefold()
 
 
+def normalize_display_name(value: str | None) -> str | None:
+    """Normalize an optional owner-facing display name."""
+
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    return normalized or None
+
+
 def validate_setup_secret(settings: Settings, setup_secret: str | None) -> None:
     """Validate the configured installation secret without changing application state."""
 
@@ -88,7 +98,12 @@ def validate_setup_secret(settings: Settings, setup_secret: str | None) -> None:
 
 
 def _user_record(user: User) -> UserRecord:
-    return UserRecord(id=user.id, email=user.email, created_at=user.created_at)
+    return UserRecord(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        created_at=user.created_at,
+    )
 
 
 def _new_session(user_id: str, now: datetime) -> tuple[AuthSession, str, str]:
@@ -159,6 +174,7 @@ async def setup_owner(
     storage: DatabaseStorage,
     settings: Settings,
     email: str,
+    display_name: str | None,
     password: str,
     setup_secret: str | None,
     mcp_api_key: str | None,
@@ -175,6 +191,7 @@ async def setup_owner(
         use_setup_secret_as_mcp_key,
     )
     normalized_email = normalize_email(email)
+    normalized_display_name = normalize_display_name(display_name)
     now = utc_now()
     password_hash = hash_password(password)
 
@@ -190,6 +207,7 @@ async def setup_owner(
                 user = User(
                     id=str(uuid4()),
                     email=normalized_email,
+                    display_name=normalized_display_name,
                     password_hash=password_hash,
                     is_active=True,
                     is_owner=True,
@@ -230,6 +248,25 @@ async def setup_owner(
     except IntegrityError as exc:
         raise AlreadyInitializedError() from exc
     return result
+
+
+async def update_profile(
+    storage: DatabaseStorage,
+    user_id: str,
+    display_name: str | None,
+) -> UserRecord:
+    """Update the authenticated owner's profile fields."""
+
+    now = utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise UnauthenticatedError()
+            user.display_name = normalize_display_name(display_name)
+            user.updated_at = now
+            await db.flush()
+            return _user_record(user)
 
 
 async def login(

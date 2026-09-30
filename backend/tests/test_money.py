@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from pydantic import SecretStr
 
 from cortex_backend.app import create_app
 from cortex_backend.config import Settings
+from cortex_backend.money.service import process_due_installments
 
 SETUP_SECRET = "test-setup-secret"
 
@@ -45,6 +47,7 @@ async def client(tmp_path, monkeypatch):
             environment="test",
             database_path=database_path,
             setup_secret=SecretStr(SETUP_SECRET),
+            installment_charging_enabled=False,
         )
     )
     async with AsyncClient(
@@ -365,9 +368,7 @@ async def test_money_summary_aggregates_currency_and_reversal_state(client: Asyn
         },
     )
     account_posting = next(
-        posting
-        for posting in reversed_transaction.json()["postings"]
-        if posting["account_id"]
+        posting for posting in reversed_transaction.json()["postings"] if posting["account_id"]
     )
     await client.post(
         f"/api/v1/money/transactions/{reversed_transaction.json()['id']}/postings/{account_posting['id']}/clear",
@@ -532,9 +533,7 @@ async def test_money_account_update_preserves_balance(client: AsyncClient) -> No
     assert updated.json()["institution_name"] == "New bank"
     assert updated.json()["balance"] == "100.00"
     assert updated.json()["currency_code"] == "PHP"
-    searched = await client.get(
-        "/api/v1/money/accounts", params={"search": "updated CHECKING"}
-    )
+    searched = await client.get("/api/v1/money/accounts", params={"search": "updated CHECKING"})
     assert [item["name"] for item in searched.json()["items"]] == ["Updated checking"]
 
 
@@ -624,6 +623,7 @@ async def mcp_client(tmp_path, monkeypatch):
             environment="test",
             database_path=database_path,
             setup_secret=SecretStr(SETUP_SECRET),
+            installment_charging_enabled=False,
         )
     )
     async with app.router.lifespan_context(app):
@@ -791,4 +791,282 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
         )
         assert summary.status_code == 200, summary.text
         mcp_summary = json.loads(summary.json()["result"]["content"][0]["text"])
-        assert mcp_summary == rest_summary.json()
+    assert mcp_summary == rest_summary.json()
+
+
+async def test_mcp_installment_operations_match_rest(tmp_path, monkeypatch) -> None:
+    async with mcp_client(tmp_path, monkeypatch) as client:
+        await setup_owner(client)
+        headers = await initialize_mcp(client)
+        today = date.today()
+        previous_month = today.month - 1 or 12
+        previous_year = today.year - (today.month == 1)
+        close_day = today.day + 1 if today.day < 28 else 1
+        purchase_date = date(previous_year, previous_month, 1)
+
+        async def call_tool(request_id: int, name: str, arguments: dict[str, object]) -> dict:
+            response = await client.post(
+                "/mcp/",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments},
+                },
+            )
+            assert response.status_code == 200, response.text
+            return json.loads(response.json()["result"]["content"][0]["text"])
+
+        card = await call_tool(
+            10,
+            "create_money_account",
+            {
+                "payload": {
+                    "name": "MCP card",
+                    "account_type": "credit_card",
+                    "currency_code": "PHP",
+                    "credit_limit": "50000",
+                    "statement_close_day": close_day,
+                    "payment_due_day": 15,
+                }
+            },
+        )
+        category = await call_tool(
+            11,
+            "create_money_category",
+            {"payload": {"name": "MCP installment", "kind": "expense"}},
+        )
+        plan = await call_tool(
+            12,
+            "create_money_installment_plan",
+            {
+                "payload": {
+                    "account_id": card["id"],
+                    "currency_code": "PHP",
+                    "purchase_date": purchase_date.isoformat(),
+                    "name": "MCP laptop",
+                    "category_id": category["id"],
+                    "total_amount": "1200",
+                    "term_months": 2,
+                }
+            },
+        )
+        assert plan["charged_count"] == 0
+        rest_plan = await client.get(f"/api/v1/money/installment-plans/{plan['id']}")
+        assert rest_plan.status_code == 200, rest_plan.text
+        assert rest_plan.json()["remaining_amount"] == "1200.00"
+
+        listed = await call_tool(13, "list_money_installment_plans", {})
+        assert [item["id"] for item in listed["items"]] == [plan["id"]]
+        processed = await call_tool(14, "process_due_money_installments", {})
+        assert processed == {"processed_count": 1}
+        charged = await client.get(f"/api/v1/money/installment-plans/{plan['id']}")
+        assert charged.json()["charged_count"] == 1
+
+        cancelled = await call_tool(15, "cancel_money_installment_plan", {"plan_id": plan["id"]})
+        assert cancelled["status"] == "cancelled"
+        assert cancelled["occurrences"][0]["status"] == "charged"
+        assert cancelled["occurrences"][1]["status"] == "cancelled"
+
+
+async def test_credit_card_installments_charge_independently_from_payments(
+    client: AsyncClient,
+) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+
+    card = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Travel card",
+            "account_type": "credit_card",
+            "currency_code": "PHP",
+            "opening_balance": "0",
+            "credit_limit": "50000",
+            "statement_close_day": 1,
+            "payment_due_day": 15,
+        },
+    )
+    assert card.status_code == 201, card.text
+    card_body = card.json()
+    assert card_body["balance"] == "0.00"
+    assert card_body["amount_owed"] == "0.00"
+    assert card_body["available_credit"] == "50000.00"
+
+    category = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Travel", "kind": "expense"},
+    )
+    assert category.status_code == 201, category.text
+    payee = await client.post(
+        "/api/v1/money/payees",
+        headers=headers,
+        json={"name": "Airline"},
+    )
+    assert payee.status_code == 201, payee.text
+
+    today = date.today()
+    previous_month = today.month - 1 or 12
+    previous_year = today.year - (today.month == 1)
+    purchase_date = date(previous_year, previous_month, 15)
+    plan = await client.post(
+        "/api/v1/money/installment-plans",
+        headers=headers,
+        json={
+            "account_id": card_body["id"],
+            "currency_code": "PHP",
+            "purchase_date": purchase_date.isoformat(),
+            "name": "Flight package",
+            "payee_id": payee.json()["id"],
+            "category_id": category.json()["id"],
+            "total_amount": "1000",
+            "fee_amount": "0",
+            "term_months": 3,
+        },
+    )
+    assert plan.status_code == 201, plan.text
+    plan_body = plan.json()
+    assert plan_body["charged_count"] == 0
+    assert plan_body["remaining_amount"] == "1000.00"
+    assert [occurrence["amount"] for occurrence in plan_body["occurrences"]] == [
+        "333.33",
+        "333.33",
+        "333.34",
+    ]
+
+    unchanged_card = await client.get(f"/api/v1/money/accounts/{card_body['id']}")
+    assert unchanged_card.json()["amount_owed"] == "0.00"
+
+    owner_id = (await client.get("/api/v1/auth/me")).json()["id"]
+    processed = await process_due_installments(
+        client._transport.app.state.storage, owner_id, today=today
+    )
+    assert processed == 1
+    processed_again = await process_due_installments(
+        client._transport.app.state.storage, owner_id, today=today
+    )
+    assert processed_again == 0
+
+    charged_plan = await client.get(f"/api/v1/money/installment-plans/{plan_body['id']}")
+    charged_body = charged_plan.json()
+    assert charged_body["charged_count"] == 1
+    assert charged_body["remaining_amount"] == "666.67"
+    assert charged_body["occurrences"][0]["status"] == "charged"
+    assert charged_body["occurrences"][0]["transaction_id"]
+    assert all(
+        occurrence["status"] == "scheduled" for occurrence in charged_body["occurrences"][1:]
+    )
+
+    charged_account = await client.get(f"/api/v1/money/accounts/{card_body['id']}")
+    assert charged_account.json()["amount_owed"] == "333.33"
+
+    funding = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Funding",
+            "account_type": "checking",
+            "currency_code": "PHP",
+            "opening_balance": "500",
+        },
+    )
+    assert funding.status_code == 201, funding.text
+    payment = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": today.isoformat(),
+            "name": "Card payment",
+            "postings": [
+                {
+                    "account_id": funding.json()["id"],
+                    "currency_code": "PHP",
+                    "amount": "-100",
+                },
+                {
+                    "account_id": card_body["id"],
+                    "currency_code": "PHP",
+                    "amount": "100",
+                },
+            ],
+        },
+    )
+    assert payment.status_code == 201, payment.text
+    paid_card = await client.get(f"/api/v1/money/accounts/{card_body['id']}")
+    assert paid_card.json()["amount_owed"] == "233.33"
+    after_payment = (await client.get(f"/api/v1/money/installment-plans/{plan_body['id']}")).json()
+    assert after_payment["charged_count"] == 1
+    assert after_payment["occurrences"][0]["status"] == "charged"
+
+    cancelled = await client.post(
+        f"/api/v1/money/installment-plans/{plan_body['id']}/cancel",
+        headers=headers,
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    cancelled_body = cancelled.json()
+    assert cancelled_body["status"] == "cancelled"
+    assert cancelled_body["occurrences"][0]["status"] == "charged"
+    assert all(
+        occurrence["status"] == "cancelled" for occurrence in cancelled_body["occurrences"][1:]
+    )
+    assert (
+        await process_due_installments(
+            client._transport.app.state.storage, owner_id, today=date.max
+        )
+        == 0
+    )
+
+
+async def test_installment_statement_dates_clamp_short_months_and_cross_year(
+    client: AsyncClient,
+) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+    card = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Long-cycle card",
+            "account_type": "credit_card",
+            "currency_code": "PHP",
+            "credit_limit": "100000",
+            "statement_close_day": 31,
+            "payment_due_day": 31,
+        },
+    )
+    category = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Equipment", "kind": "expense"},
+    )
+    assert card.status_code == 201, card.text
+    assert category.status_code == 201, category.text
+
+    plan = await client.post(
+        "/api/v1/money/installment-plans",
+        headers=headers,
+        json={
+            "account_id": card.json()["id"],
+            "currency_code": "PHP",
+            "purchase_date": "2026-01-01",
+            "name": "Equipment plan",
+            "category_id": category.json()["id"],
+            "total_amount": "1400",
+            "term_months": 14,
+        },
+    )
+    assert plan.status_code == 201, plan.text
+    occurrences = plan.json()["occurrences"]
+    assert [occurrences[index]["charge_date"] for index in (0, 1, 2, 12, 13)] == [
+        "2026-01-31",
+        "2026-02-28",
+        "2026-03-31",
+        "2027-01-31",
+        "2027-02-28",
+    ]
+    account = card.json()
+    assert account["next_statement_close_date"]
+    assert account["next_payment_due_date"]

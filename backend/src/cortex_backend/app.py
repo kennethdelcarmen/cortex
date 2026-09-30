@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.auth import router as auth_router
 from .api.files import router as files_router
 from .api.health import router as health_router
+from .api.home import router as home_router
 from .api.logs import router as activity_logs_router
 from .api.mcp import MCPAuthMiddleware
 from .api.money import router as money_router
@@ -21,9 +22,12 @@ from .api.tasks import series_router as task_series_router
 from .api.v1 import router as v1_router
 from .auth.throttling import LoginThrottle
 from .config import Settings, get_settings
+from .embeddings.provider import EmbeddingProvider, LocalEmbeddingProvider
+from .embeddings.service import EmbeddingHealth, run_embedding_loop
 from .files.processing import FileProcessingHealth, run_file_processing_loop
 from .files.storage import FileBlobStore, LocalFileBlobStore
 from .mcp import create_mcp_server
+from .money.processing import run_installment_charging_loop
 from .storage import ClosableStorage, DatabaseStorage, SQLiteStorage, Storage
 
 
@@ -32,6 +36,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Release application-owned storage resources when the app shuts down."""
 
     processing_task: asyncio.Task[None] | None = None
+    embedding_task: asyncio.Task[None] | None = None
+    installment_task: asyncio.Task[None] | None = None
     async with application.state.mcp_app.lifespan(application):
         try:
             if (
@@ -48,6 +54,30 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     )
                 )
                 application.state.file_processing_task = processing_task
+            if (
+                application.state.settings.embeddings_enabled
+                and isinstance(application.state.storage, DatabaseStorage)
+                and application.state.embedding_provider is not None
+            ):
+                embedding_task = asyncio.create_task(
+                    run_embedding_loop(
+                        application.state.storage,
+                        application.state.embedding_provider,
+                        application.state.settings,
+                        application.state.embedding_health,
+                    )
+                )
+                application.state.embedding_task = embedding_task
+            if application.state.settings.installment_charging_enabled and isinstance(
+                application.state.storage, DatabaseStorage
+            ):
+                installment_task = asyncio.create_task(
+                    run_installment_charging_loop(
+                        application.state.storage,
+                        application.state.settings,
+                    )
+                )
+                application.state.installment_charging_task = installment_task
             yield
         finally:
             if processing_task is not None:
@@ -55,6 +85,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 with suppress(asyncio.CancelledError):
                     await processing_task
             application.state.file_processing_task = None
+            if embedding_task is not None:
+                embedding_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await embedding_task
+            application.state.embedding_task = None
+            if installment_task is not None:
+                installment_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await installment_task
+            application.state.installment_charging_task = None
             storage = application.state.storage
             if isinstance(storage, ClosableStorage):
                 await storage.close()
@@ -64,22 +104,34 @@ def create_app(
     settings: Settings | None = None,
     storage: Storage | None = None,
     file_storage: FileBlobStore | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> FastAPI:
     """Build an application with explicit settings and storage dependencies."""
 
     resolved_settings = settings or get_settings()
     resolved_storage = (
-        storage if storage is not None else SQLiteStorage(resolved_settings.database_path)
+        storage
+        if storage is not None
+        else SQLiteStorage(
+            resolved_settings.database_path,
+            sqlite_vec_enabled=resolved_settings.embeddings_enabled,
+        )
     )
     resolved_file_storage = (
         file_storage
         if file_storage is not None
         else LocalFileBlobStore(resolved_settings.file_storage_path)
     )
+    resolved_embedding_provider = embedding_provider
+    if resolved_embedding_provider is None and resolved_settings.embeddings_enabled:
+        resolved_embedding_provider = LocalEmbeddingProvider(
+            resolved_settings.embedding_model_cache_path
+        )
     mcp_server = create_mcp_server(
         resolved_settings.app_name,
         resolved_storage,
         resolved_file_storage,
+        resolved_embedding_provider,
     )
     mcp_app = mcp_server.http_app(
         json_response=True,
@@ -96,6 +148,7 @@ def create_app(
     application.state.settings = resolved_settings
     application.state.storage = resolved_storage
     application.state.file_storage = resolved_file_storage
+    application.state.embedding_provider = resolved_embedding_provider
     application.state.mcp_server = mcp_server
     application.state.mcp_app = mcp_app
     application.state.login_throttle = LoginThrottle()
@@ -107,6 +160,11 @@ def create_app(
         )
     )
     application.state.file_processing_task = None
+    application.state.embedding_health = EmbeddingHealth(
+        enabled=resolved_settings.embeddings_enabled,
+    )
+    application.state.embedding_task = None
+    application.state.installment_charging_task = None
 
     application.add_middleware(
         CORSMiddleware,
@@ -117,6 +175,7 @@ def create_app(
     )
 
     application.include_router(health_router)
+    application.include_router(home_router)
     application.include_router(v1_router)
     application.include_router(auth_router)
     application.include_router(activity_logs_router)

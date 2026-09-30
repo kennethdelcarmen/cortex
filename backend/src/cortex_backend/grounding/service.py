@@ -11,6 +11,7 @@ from ..chunking.context import (
     assemble_context,
 )
 from ..chunking.service import search_chunks
+from ..embeddings.provider import EmbeddingProvider
 from ..storage import DatabaseStorage
 from .errors import InvalidQuestionError
 
@@ -100,11 +101,18 @@ async def prepare_question(
     storage: DatabaseStorage,
     user_id: str,
     question: str,
+    *,
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> GroundedQuestionPackage:
     """Retrieve context and prepare a safe prompt for one owner-scoped question."""
 
     try:
-        chunks = await search_chunks(storage, user_id, question)
+        chunks = await search_chunks(
+            storage,
+            user_id,
+            question,
+            embedding_provider=embedding_provider,
+        )
         context = assemble_context(question, chunks)
     except ValueError as exc:
         raise InvalidQuestionError from exc

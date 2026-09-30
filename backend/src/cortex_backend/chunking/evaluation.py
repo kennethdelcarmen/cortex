@@ -51,6 +51,7 @@ class EvaluationQuery:
     id: str
     owner: str
     query: str
+    semantic_query: str | None
     source_types: tuple[ChunkSourceType, ...]
     limit: int
     expected: tuple[ExpectedHit, ...]
@@ -189,6 +190,10 @@ def load_fixture(path: Path) -> EvaluationFixture:
         query_ids.add(query_id)
         owner = _string(query.get("owner"), f"fixture.queries[{index}].owner")
         query_text = _string(query.get("query"), f"fixture.queries[{index}].query")
+        semantic_query = _optional_string(
+            query.get("semantic_query"),
+            f"fixture.queries[{index}].semantic_query",
+        )
         source_types = tuple(
             _source_type(value, f"fixture.queries[{index}].source_types[]")
             for value in _list(
@@ -243,6 +248,7 @@ def load_fixture(path: Path) -> EvaluationFixture:
                 id=query_id,
                 owner=owner,
                 query=query_text,
+                semantic_query=semantic_query,
                 source_types=source_types,
                 limit=limit,
                 expected=tuple(expected),

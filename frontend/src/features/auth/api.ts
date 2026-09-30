@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from "@/lib/api/client";
 const userResponseSchema = z.object({
   id: z.string().min(1),
   email: z.string().email(),
+  display_name: z.string().min(1).nullable(),
   created_at: z.string().min(1),
 });
 
@@ -33,6 +34,7 @@ export async function getCurrentUser(): Promise<User | null> {
 
 export async function setupOwner(input: {
   email: string;
+  displayName?: string;
   password: string;
   setupSecret: string;
   mcpApiKey?: string;
@@ -47,10 +49,22 @@ export async function setupOwner(input: {
       },
       body: JSON.stringify({
         email: input.email.trim(),
+        display_name: input.displayName?.trim() || null,
         password: input.password,
         mcp_api_key: input.mcpApiKey,
         use_setup_secret_as_mcp_key: input.useSetupSecretAsMcpKey,
       }),
+    },
+    userResponseSchema,
+  );
+}
+
+export async function updateProfile(displayName: string | null): Promise<User> {
+  return apiFetch(
+    "/api/v1/auth/me",
+    {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: displayName?.trim() || null }),
     },
     userResponseSchema,
   );

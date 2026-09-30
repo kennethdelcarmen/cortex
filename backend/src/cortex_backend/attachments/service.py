@@ -131,7 +131,7 @@ async def _replace_links(
 
     next_position = 0
     if preserve_deleted:
-        deleted_positions = await db.scalars(
+        deleted_positions: Any = await db.scalars(
             select(association_model.position)
             .join(File, File.id == association_model.file_id)
             .where(
@@ -228,7 +228,10 @@ async def _attachments_for(
         )
         .order_by(owner_column.asc(), association_model.position.asc())
     )
-    rows = result.all()
+    rows: list[tuple[str, int, File]] = [
+        (str(owner_id), cast(int, position), cast(File, file))
+        for owner_id, position, file in result.all()
+    ]
     files = await _file_records(db, user_id, [file for _, _, file in rows])
     attachments: dict[str, list[FileRecord]] = defaultdict(list)
     for owner_id, _, file in rows:

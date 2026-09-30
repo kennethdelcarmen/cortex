@@ -1,16 +1,18 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowUpRight, Building2, CalendarDays, CheckCircle2, CircleAlert, Landmark, ReceiptText, WalletCards } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Building2, CalendarDays, CheckCircle2, ChevronDown, CircleAlert, Landmark, ReceiptText, WalletCards } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useCurrentUser } from "@/features/auth/hooks";
 import { WorkspaceRouteGuard, WorkspaceShell } from "@/features/workspace/components/workspace-shell";
+import { currentLocalDateInput } from "@/lib/date";
 import { cn } from "@/lib/utils";
 import {
   getMoneySummary,
@@ -45,6 +47,12 @@ import {
 
 type BudgetFilter = "all" | "on_track" | "needs_attention";
 
+const budgetFilterLabels: Record<BudgetFilter, string> = {
+  all: "All",
+  on_track: "On track",
+  needs_attention: "Needs attention",
+};
+
 function MetricCard({ label, value, detail, tone, icon: Icon, accent = false }: { label: string; value?: string; detail: string; tone: string; icon: typeof WalletCards; accent?: boolean }) {
   return <Card className={cn("relative min-w-0 rounded-xl border-border/80 p-5 shadow-none", accent && "overflow-hidden")}>
     {accent ? <span className="absolute inset-y-0 left-0 w-1 bg-primary/80" aria-hidden="true" /> : null}
@@ -61,7 +69,7 @@ function MoneySummary({ summary, currencyCode, period, pending }: { summary?: Mo
     { label: "Spending", value: summary ? formatMoney(summary.spending_amount, currencyCode) : undefined, detail: "Posted outflows", tone: "text-tag-amber-foreground", icon: ArrowUpRight },
     { label: "Budget left", value: summary ? formatMoney(summary.budget_remaining_amount, currencyCode) : undefined, detail: "Across planned categories", tone: summary && Number(summary.budget_remaining_amount) < 0 ? "text-destructive" : "text-tag-sea-glass-foreground", icon: CheckCircle2 },
   ];
-  return <section aria-labelledby="money-snapshot-title" className="mt-7"><div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Monthly snapshot</p><h2 id="money-snapshot-title" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">Make the month legible.</h2></div><p className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">{currencyCode} · {periodLabel(period)}</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{values.map((metric) => <MetricCard key={metric.label} {...metric} value={pending ? undefined : metric.value} />)}</div></section>;
+  return <section aria-labelledby="money-snapshot-title" className="mt-7"><div className="mb-4 flex items-center justify-between gap-3"><h2 id="money-snapshot-title" className="sr-only">Monthly snapshot</h2><p className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">{currencyCode} · {periodLabel(period)}</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{values.map((metric) => <MetricCard key={metric.label} {...metric} value={pending ? undefined : metric.value} />)}</div></section>;
 }
 
 function EmptyState({ icon: Icon, title, description }: { icon: typeof WalletCards; title: string; description: string }) {
@@ -82,11 +90,71 @@ function BudgetPanel({ budgets, categories, pending }: { budgets: MoneyBudget[];
   const [filter, setFilter] = useState<BudgetFilter>("all");
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const visibleBudgets = budgets.filter((budget) => filter === "all" || (filter === "needs_attention" ? Number(budget.spent_amount) > Number(budget.amount) : Number(budget.spent_amount) <= Number(budget.amount)));
-  return <Card className="rounded-xl border-border/80 p-5 shadow-none sm:p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex items-center gap-2 text-primary-strong"><WalletCards aria-hidden="true" className="size-4" /><p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">Planned spending</p></div><h2 className="mt-3 text-xl font-medium tracking-[-0.025em]">Budget pulse</h2><p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">See where the month is steady and where it needs a little attention.</p></div><div className="flex flex-wrap gap-1" role="group" aria-label="Filter budgets">{(["all", "on_track", "needs_attention"] as BudgetFilter[]).map((item) => <Button key={item} type="button" variant={filter === item ? "secondary" : "ghost"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)} className="h-8 text-xs">{item === "all" ? "All" : item === "on_track" ? "On track" : "Needs attention"}</Button>)}</div></div><Separator className="my-5" />{pending ? <div className="space-y-3"><div className="h-12 animate-pulse rounded-lg bg-muted" /><div className="h-12 animate-pulse rounded-lg bg-muted" /></div> : visibleBudgets.length ? <ul aria-label={`${filter} budgets`}>{visibleBudgets.map((budget) => <BudgetRow key={budget.id} budget={budget} category={categoryById.get(budget.category_id)} />)}</ul> : <EmptyState icon={CheckCircle2} title="Nothing needs attention here." description="Every category is currently within its planned amount." />}</Card>;
+  return (
+    <Card className="relative h-full w-full cursor-pointer rounded-xl border-border/80 p-5 shadow-none transition-colors hover:bg-muted/15 sm:p-6">
+      <Link href="/money/budgets" aria-label="Open budgets" className="absolute inset-0 z-0 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/40 focus-visible:ring-inset" />
+      <div className="relative z-10 pointer-events-none">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-primary-strong">
+              <WalletCards aria-hidden="true" className="size-4" />
+              <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">Planned spending</p>
+            </div>
+            <h2 id="money-budget-section" className="mt-3 text-xl font-medium tracking-[-0.025em]">Budget pulse</h2>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            <span className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">{budgets.length} categories</span>
+            <div className="pointer-events-auto">
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label={`Filter budgets: ${budgetFilterLabels[filter]}`}
+                  render={<Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-2.5 text-xs" />}
+                >
+                  <span>{budgetFilterLabels[filter]}</span>
+                  <ChevronDown aria-hidden="true" className="size-3.5" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" aria-label="Filter budgets" className="w-44">
+                  <DropdownMenuRadioGroup value={filter} onValueChange={(value) => value && setFilter(value as BudgetFilter)}>
+                    {(Object.keys(budgetFilterLabels) as BudgetFilter[]).map((item) => (
+                      <DropdownMenuRadioItem key={item} value={item} closeOnClick>
+                        {budgetFilterLabels[item]}
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </div>
+        <Separator className="my-5" />
+        {pending ? <div className="space-y-3"><div className="h-12 animate-pulse rounded-lg bg-muted" /><div className="h-12 animate-pulse rounded-lg bg-muted" /></div> : visibleBudgets.length ? <ul aria-label={`${filter} budgets`}>{visibleBudgets.map((budget) => <BudgetRow key={budget.id} budget={budget} category={categoryById.get(budget.category_id)} />)}</ul> : <EmptyState icon={CheckCircle2} title="Nothing needs attention here." description="Every category is currently within its planned amount." />}
+      </div>
+    </Card>
+  );
 }
 
 function AccountsPanel({ accounts, pending }: { accounts: MoneyAccount[]; pending: boolean }) {
-  return <Card className="rounded-xl border-border/80 p-5 shadow-none sm:p-6"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2 text-primary-strong"><Landmark aria-hidden="true" className="size-4" /><p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">Where it lives</p></div><h2 className="mt-3 text-xl font-medium tracking-[-0.025em]">Accounts</h2></div><div className="flex flex-col items-end gap-2"><Badge variant="outline" className="font-mono text-[0.62rem] uppercase tracking-[0.1em]">{pending ? "…" : `${accounts.length} active`}</Badge><Link href="/money/accounts" className="rounded-sm text-xs font-medium text-primary-strong outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/40">Manage</Link></div></div><div className="mt-5 divide-y divide-border/70 border-y border-border/70">{accounts.length ? accounts.map((account) => <div key={account.id} className="flex items-center gap-3 py-4 first:pt-3 last:pb-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary-strong">{account.account_type === "cash" ? <WalletCards aria-hidden="true" className="size-4" /> : <Building2 aria-hidden="true" className="size-4" />}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{accountLabel(account)}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{accountTypeLabel(account.account_type)} · {account.institution_name ?? "Local"}</span></span><span className="shrink-0 text-right"><span className="block font-mono text-sm font-medium">{formatMoney(account.balance, account.currency_code)}</span><span className="mt-1 block font-mono text-[0.62rem] uppercase tracking-[0.08em] text-muted-foreground">{account.currency_code}</span></span></div>) : <EmptyState icon={Landmark} title="No accounts yet." description="Create an account before recording a transaction." />}</div></Card>;
+  return (
+    <Card className="relative h-full w-full cursor-pointer rounded-xl border-border/80 p-5 shadow-none transition-colors hover:bg-muted/15 sm:p-6">
+      <Link href="/money/accounts" aria-label="Open accounts" className="absolute inset-0 z-0 rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/40 focus-visible:ring-inset" />
+      <div className="relative z-10 pointer-events-none">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-primary-strong">
+              <Landmark aria-hidden="true" className="size-4" />
+              <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">Where it lives</p>
+            </div>
+            <h2 id="money-accounts-section" className="mt-3 text-xl font-medium tracking-[-0.025em]">Accounts</h2>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+            <Badge variant="outline" className="font-mono text-[0.62rem] uppercase tracking-[0.1em]">{pending ? "…" : `${accounts.length} active`}</Badge>
+          </div>
+        </div>
+        <Separator className="my-5" />
+        <div className="divide-y divide-border/70 border-y border-border/70">{accounts.length ? accounts.map((account) => <div key={account.id} className="flex items-center gap-3 py-4 first:pt-3 last:pb-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background text-primary-strong">{account.account_type === "cash" ? <WalletCards aria-hidden="true" className="size-4" /> : <Building2 aria-hidden="true" className="size-4" />}</span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{accountLabel(account)}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{accountTypeLabel(account.account_type)} · {account.institution_name ?? "Local"}</span></span><span className="shrink-0 text-right"><span className="block font-mono text-sm font-medium">{formatMoney(account.balance, account.currency_code)}</span><span className="mt-1 block font-mono text-[0.62rem] uppercase tracking-[0.08em] text-muted-foreground">{account.currency_code}</span></span></div>) : <EmptyState icon={Landmark} title="No accounts yet." description="Create an account before recording a transaction." />}</div>
+      </div>
+    </Card>
+  );
 }
 
 function ActivityPanel({ transactions, accounts, payees, categories, onOpen, pending }: { transactions: MoneyTransaction[]; accounts: MoneyAccount[]; payees: { id: string; name: string }[]; categories: MoneyCategory[]; onOpen: (id: string) => void; pending: boolean }) {
@@ -122,60 +190,53 @@ function MoneyDashboard({ email }: { email: string }) {
 
   return (
     <WorkspaceShell email={email}>
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-14">
-        <div className="min-w-0">
-          <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Money</p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em]">Overview</h1>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Keep the month close, then record the next movement without leaving the page.</p>
-            </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <label htmlFor="money-period" className="flex flex-col gap-2 font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground">
-                View month
-                <Select value={period} onValueChange={(value) => value && setPeriod(value)}>
-                  <SelectTrigger id="money-period" aria-label="Choose money month" className="h-10 w-44 bg-background font-sans text-sm normal-case tracking-normal">
-                    <CalendarDays aria-hidden="true" className="size-4 text-primary-strong" />
-                    <SelectValue>{periodLabel(period)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>{periodOptions().map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
-                </Select>
-              </label>
-              <MoneySelectField
-                id="money-currency"
-                label="Currency"
-                value={currencyCode}
-                selectedLabel={currencyCode}
-                onValueChange={setCurrencyCode}
-                size="compact"
-                triggerClassName="w-24"
-              >
-                {currencyOptions.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
-              </MoneySelectField>
-            </div>
-          </header>
-          {catalog.isError || summaryQuery.isError || budgetsQuery.isError || activityQuery.isError ? <div role="alert" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"><span className="text-destructive">{catalog.isError ? "Money catalog could not load." : summaryQuery.isError ? describeMoneyError(summaryQuery.error) : "Some money activity could not load."}</span><Button type="button" variant="outline" size="sm" onClick={retryLiveData}>Try again</Button></div> : null}
-          <MoneySummary summary={summaryQuery.data} currencyCode={currencyCode} period={period} pending={summaryQuery.isPending} />
-          <section aria-labelledby="money-budget-section" className="mt-8">
-            <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Where the month is going</p><h2 id="money-budget-section" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">Budget pulse</h2></div><div className="flex items-center gap-3"><span className="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-muted-foreground">{budgetsQuery.data?.items.length ?? 0} categories</span><Link href="/money/budgets" className="rounded-sm text-xs font-medium text-primary-strong outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/40">Manage budgets</Link></div></div>
+      <div className="min-w-0">
+        <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Money</p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-[-0.035em]">Overview</h1>
+            <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Keep the month close, then record the next movement without leaving the page.</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <label htmlFor="money-period" className="flex flex-col gap-2 font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground">
+              View month
+              <Select value={period} onValueChange={(value) => value && setPeriod(value)}>
+                <SelectTrigger id="money-period" aria-label="Choose money month" className="h-10 w-44 bg-background font-sans text-sm normal-case tracking-normal">
+                  <CalendarDays aria-hidden="true" className="size-4 text-primary-strong" />
+                  <SelectValue>{periodLabel(period)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>{periodOptions().map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </label>
+            <MoneySelectField
+              id="money-currency"
+              label="Currency"
+              value={currencyCode}
+              selectedLabel={currencyCode}
+              onValueChange={setCurrencyCode}
+              size="compact"
+              triggerClassName="w-24"
+            >
+              {currencyOptions.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
+            </MoneySelectField>
+          </div>
+        </header>
+        {catalog.isError || summaryQuery.isError || budgetsQuery.isError || activityQuery.isError ? <div role="alert" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"><span className="text-destructive">{catalog.isError ? "Money catalog could not load." : summaryQuery.isError ? describeMoneyError(summaryQuery.error) : "Some money activity could not load."}</span><Button type="button" variant="outline" size="sm" onClick={retryLiveData}>Try again</Button></div> : null}
+        <MoneySummary summary={summaryQuery.data} currencyCode={currencyCode} period={period} pending={summaryQuery.isPending} />
+        <div className="mt-8 grid items-stretch gap-8 lg:grid-cols-2">
+          <section aria-labelledby="money-budget-section" className="flex min-w-0">
             <BudgetPanel budgets={budgetsQuery.data?.items ?? []} categories={catalog.categories} pending={budgetsQuery.isPending || catalog.isPending} />
           </section>
-          <section aria-labelledby="money-activity-section" className="mt-8">
+          <section aria-labelledby="money-accounts-section" className="flex min-w-0">
+            <AccountsPanel accounts={catalog.accounts} pending={catalog.isPending} />
+          </section>
+          <section aria-labelledby="money-activity-section" className="min-w-0 lg:col-span-2">
             <div className="mb-4"><p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Close to the surface</p><h2 id="money-activity-section" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">Recent movement</h2></div>
             <ActivityPanel transactions={transactions} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} onOpen={openTransaction} pending={activityQuery.isPending} />
           </section>
         </div>
-        <aside className="min-w-0 lg:pt-1" aria-label="Money context">
-          <AccountsPanel accounts={catalog.accounts} pending={catalog.isPending} />
-          <Card className="relative mt-6 overflow-hidden rounded-xl border-border/80 p-5 shadow-none sm:p-6">
-            <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
-            <div className="flex items-center gap-2 text-primary-strong"><CalendarDays aria-hidden="true" className="size-4" /><p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">Keep the signal close</p></div>
-            <h2 className="mt-4 text-lg font-medium tracking-[-0.025em]">A quiet month is a useful month.</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">Use Create transaction to capture a movement while the month is still in reach.</p>
-          </Card>
-        </aside>
       </div>
-      <TransactionDrawer open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setDrawerTransactionId(null); }} defaultDate={new Date().toISOString().slice(0, 10)} defaultCurrencyCode={currencyCode} transactionId={drawerTransactionId} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} />
+      <TransactionDrawer open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setDrawerTransactionId(null); }} defaultDate={currentLocalDateInput()} defaultCurrencyCode={currencyCode} transactionId={drawerTransactionId} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} />
       <MoneyFloatingAction onClick={openCreate} />
     </WorkspaceShell>
   );

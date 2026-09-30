@@ -48,6 +48,7 @@ async def readyz(
     worker_health: FileProcessingHealth | None = getattr(
         request.app.state, "file_processing_health", None
     )
+    warnings: list[str] = []
     if worker_health is not None and worker_health.enabled:
         worker_task = getattr(request.app.state, "file_processing_task", None)
         if not worker_health.ready or worker_task is None or worker_task.done():
@@ -64,6 +65,11 @@ async def readyz(
             )
 
         if worker_health.warnings:
-            return HealthResponse(status="degraded", warnings=list(worker_health.warnings))
+            warnings.extend(worker_health.warnings)
 
-    return HealthResponse(status="ready")
+    embedding_health = getattr(request.app.state, "embedding_health", None)
+    if embedding_health is not None and embedding_health.enabled:
+        if embedding_health.state != "healthy":
+            warnings.append("embeddings_unavailable")
+
+    return HealthResponse(status="degraded" if warnings else "ready", warnings=warnings)

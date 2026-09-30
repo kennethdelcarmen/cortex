@@ -1,12 +1,11 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Clock3, LogOut } from "lucide-react";
+import { ArrowUpRight, LogOut } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
-import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -19,7 +18,6 @@ import { authQueryKey, describeAuthError, logout } from "@/features/auth/api";
 import { useCurrentUser } from "@/features/auth/hooks";
 import { cn } from "@/lib/utils";
 import { CaptureMenu } from "./capture-menu";
-import { ActivityFeed } from "@/features/activity/components/activity-feed";
 import {
   moduleDefinitions,
   type WorkspaceModule,
@@ -31,6 +29,7 @@ type WorkspaceShellProps = {
   email: string;
   children: ReactNode;
   sidebarContent?: ReactNode;
+  onCapture?: (key: "task" | "note" | "expense") => void;
 };
 
 function isActiveNavigationItem(pathname: string | null, item: WorkspaceNavigationItem) {
@@ -277,9 +276,11 @@ function WorkspaceSidebar({
 function MobileWorkspaceHeader({
   isSigningOut,
   onSignOut,
+  onCapture,
 }: {
   isSigningOut: boolean;
   onSignOut: () => void;
+  onCapture?: (key: "task" | "note" | "expense") => void;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-border/80 bg-background lg:hidden">
@@ -291,7 +292,7 @@ function MobileWorkspaceHeader({
           Cortex
         </Link>
         <div className="flex items-center gap-1">
-          <CaptureMenu compact />
+          <CaptureMenu compact onSelect={onCapture} />
           <SignOutButton compact isPending={isSigningOut} onSignOut={onSignOut} />
         </div>
       </div>
@@ -314,7 +315,7 @@ function MobileWorkspaceNav() {
   );
 }
 
-export function WorkspaceShell({ email, children, sidebarContent }: WorkspaceShellProps) {
+export function WorkspaceShell({ email, children, sidebarContent, onCapture }: WorkspaceShellProps) {
   const queryClient = useQueryClient();
   const feedback = useFeedback();
   const logActivity = useActivityLogger();
@@ -350,6 +351,7 @@ export function WorkspaceShell({ email, children, sidebarContent }: WorkspaceShe
           <MobileWorkspaceHeader
             isSigningOut={mutation.isPending}
             onSignOut={signOut}
+            onCapture={onCapture}
           />
           <main className="mx-auto w-full max-w-[1240px] px-5 pb-28 pt-7 sm:px-8 sm:pt-10 lg:px-10 lg:pb-12 lg:pt-12">
             {children}
@@ -358,153 +360,6 @@ export function WorkspaceShell({ email, children, sidebarContent }: WorkspaceShe
       </div>
       <MobileWorkspaceNav />
     </div>
-  );
-}
-
-function CurrentDateLabel() {
-  const now = new Date();
-  const dateLabel = new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  }).format(now);
-
-  return (
-    <time
-      dateTime={now.toISOString().slice(0, 10)}
-      suppressHydrationWarning
-      className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-primary-strong"
-    >
-      {dateLabel}
-    </time>
-  );
-}
-
-function HomeDashboard() {
-  return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-14">
-      <div className="min-w-0">
-        <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-8">
-          <div className="max-w-2xl">
-            <CurrentDateLabel />
-            <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-foreground sm:text-4xl">
-              Today, in reach.
-            </h1>
-            <p className="mt-3 max-w-xl text-base leading-7 text-muted-foreground sm:text-base">
-              Keep the next meaningful action close, with the rest of your life nearby.
-            </p>
-          </div>
-          <div className="hidden shrink-0 lg:block">
-            <CaptureMenu />
-          </div>
-        </header>
-
-        <section aria-labelledby="focus-sequence-title" className="mt-7 sm:mt-8">
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">
-                Today
-              </p>
-              <h2 id="focus-sequence-title" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">
-                Focus sequence
-              </h2>
-            </div>
-            <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground">
-              No items yet
-            </span>
-          </div>
-
-          <Card className="relative overflow-hidden rounded-xl border-border/80 p-0 shadow-[0_20px_60px_-44px_color-mix(in_oklab,var(--foreground)_45%,transparent)]">
-            <span className="absolute inset-y-0 left-0 w-1 bg-primary/75" aria-hidden="true" />
-            <div className="p-6 sm:p-8">
-              <div className="flex items-center gap-2 text-primary-strong">
-                <Clock3 aria-hidden="true" className="size-4" />
-                <p className="font-mono text-[0.66rem] font-medium uppercase tracking-[0.16em]">
-                  Ready for your first move
-                </p>
-              </div>
-              <h3 className="mt-4 max-w-lg text-xl font-medium tracking-[-0.025em] sm:text-2xl">
-                Give today a clear beginning.
-              </h3>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground sm:text-base">
-                Your focus sequence will appear here when task and time-block capture is connected. The rust rail will mark priority; labels will keep status and context explicit.
-              </p>
-              <p className="mt-6 font-mono text-[0.66rem] uppercase tracking-[0.14em] text-muted-foreground">
-                Use Add above to shape the day.
-              </p>
-            </div>
-          </Card>
-        </section>
-      </div>
-
-      <HomeContextRail />
-    </div>
-  );
-}
-
-function HomeContextRail() {
-  return (
-    <aside className="min-w-0 lg:pt-1" aria-labelledby="context-rail-title">
-      <section>
-        <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">
-          At a glance
-        </p>
-        <h2 id="context-rail-title" className="mt-3 max-w-xs text-xl font-medium tracking-[-0.025em]">
-          Keep the rest in reach.
-        </h2>
-        <nav aria-label="Workspace modules" className="mt-7 divide-y divide-border/70 border-y border-border/70">
-          {Object.values(moduleDefinitions).map((module) => {
-            const Icon = module.icon;
-
-            return (
-              <Link
-                key={module.key}
-                href={module.href}
-                className="group flex gap-3 py-4 outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50"
-              >
-                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-card text-primary-strong transition-colors group-hover:border-primary/40">
-                  <Icon aria-hidden="true" className="size-4" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-foreground">{module.label}</span>
-                    <ArrowUpRight aria-hidden="true" className="size-3.5 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-                  </span>
-                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">{module.description}</span>
-                </span>
-              </Link>
-            );
-          })}
-        </nav>
-      </section>
-
-      <section className="mt-10">
-        <Separator className="mb-6" />
-        <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">
-          Workspace
-        </p>
-        <div className="mt-4 flex items-center gap-2">
-          <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
-          <Badge variant="outline" className="h-auto rounded-full border-primary/30 px-2 py-0.5 font-mono text-[0.68rem] font-medium uppercase tracking-[0.14em] text-primary-strong">
-            Local by default
-          </Badge>
-        </div>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">
-          The visual workspace and agent tools share the same service boundary.
-        </p>
-      </section>
-
-      <ActivityFeed />
-    </aside>
-  );
-}
-
-export function WorkspaceHome({ email }: { email: string }) {
-  return (
-    <WorkspaceShell email={email}>
-      <HomeDashboard />
-    </WorkspaceShell>
   );
 }
 

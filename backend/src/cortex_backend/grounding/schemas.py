@@ -20,7 +20,9 @@ class GroundedCitationResponse(BaseModel):
     source_version: str
     chunk_ordinal: int = Field(ge=0)
     retrieval_rank: int = Field(ge=1)
-    retrieval_score: float
+    retrieval_score: float = Field(
+        description="Final lexical or hybrid retrieval score; higher is better."
+    )
     file_ids: list[str]
     file_names: list[str]
 

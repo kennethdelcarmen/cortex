@@ -33,6 +33,8 @@ def test_settings_default_to_local_sqlite_path(monkeypatch) -> None:
     assert settings.database_path == Path("data/cortex.db")
     assert settings.file_storage_path == Path("data/files")
     assert settings.file_max_size_bytes == 25 * 1024 * 1024
+    assert settings.embeddings_enabled is False
+    assert settings.embedding_batch_size == 16
 
 
 def test_production_settings_require_setup_secret() -> None:

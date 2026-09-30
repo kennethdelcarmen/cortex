@@ -7,7 +7,7 @@ import { BlockingErrorDialog } from "@/components/feedback";
 import { AuthLayout, AuthLoading } from "@/features/auth/components/auth-layout";
 import { describeAuthError } from "@/features/auth/api";
 import { useCurrentUser } from "@/features/auth/hooks";
-import { WorkspaceHome } from "@/features/workspace/components/workspace-shell";
+import HomePage from "@/features/home/components/home-page";
 
 function AuthChoice() {
   return (
@@ -67,7 +67,10 @@ export default function Home() {
   }
 
   return currentUser.data ? (
-    <WorkspaceHome email={currentUser.data.email} />
+    <HomePage
+      email={currentUser.data.email}
+      displayName={currentUser.data.display_name}
+    />
   ) : (
     <AuthChoice />
   );

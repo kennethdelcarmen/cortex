@@ -66,6 +66,7 @@ export function SetupWizard() {
   const [step, setStep] = useState<1 | 2>(1);
   const [setupSecret, setSetupSecret] = useState("");
   const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [mcpApiKey, setMcpApiKey] = useState("");
@@ -209,6 +210,7 @@ export function SetupWizard() {
     setErrors({});
     mutation.mutate({
       email: result.data.email,
+      displayName,
       password: result.data.password,
       setupSecret,
       mcpApiKey: result.data.mcpApiKey || undefined,
@@ -304,6 +306,23 @@ export function SetupWizard() {
                 setSecretError(undefined);
               }}
               disabled={secretMutation.isPending}
+            />
+          </FormField>
+          <FormField
+            id="setup-display-name"
+            label="Display name"
+            hint="Optional. This is how Cortex will greet you."
+          >
+            <Input
+              id="setup-display-name"
+              name="display-name"
+              type="text"
+              className={inputClassName}
+              autoComplete="name"
+              value={displayName}
+              maxLength={80}
+              onChange={(event) => setDisplayName(event.target.value)}
+              disabled={mutation.isPending}
             />
           </FormField>
           <Button

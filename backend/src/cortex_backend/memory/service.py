@@ -538,3 +538,16 @@ async def summarize_notes(storage: DatabaseStorage, user_id: str) -> NoteSummary
                 for name, color, archived_at, count in result.all()
             ]
         )
+
+
+async def count_notes(storage: DatabaseStorage, user_id: str) -> int:
+    """Return the number of active notes owned by the authenticated user."""
+
+    async with storage.session() as db:
+        count = await db.scalar(
+            select(func.count(Note.id)).where(
+                Note.user_id == user_id,
+                Note.deleted_at.is_(None),
+            )
+        )
+        return int(count or 0)

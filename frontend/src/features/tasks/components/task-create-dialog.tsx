@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { currentLocalDateInput } from "@/lib/date";
 import type { TaskPriority, TaskStatus } from "../api";
 import type { StoredFile } from "@/features/memory/files-api";
 import type { Tag, TagColor } from "@/features/tags/api";
@@ -22,7 +23,6 @@ import {
 import {
   adjustDueDateForStart,
   localDateTimePartsToIso,
-  currentLocalDateInput,
   dueDateTimeAfterStart,
   priorityOption,
   statusOption,

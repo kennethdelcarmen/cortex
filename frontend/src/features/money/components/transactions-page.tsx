@@ -1,8 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { ReceiptText, Search, SlidersHorizontal, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, CreditCard, ReceiptText, Repeat2, Search, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,16 +20,19 @@ import {
 import { SelectItem } from "@/components/ui/select";
 import { WorkspaceRouteGuard, WorkspaceShell } from "@/features/workspace/components/workspace-shell";
 import { useCurrentUser } from "@/features/auth/hooks";
+import { currentLocalDateInput } from "@/lib/date";
 import { cn } from "@/lib/utils";
 import {
+  cancelMoneyInstallmentPlan,
   moneySummaryQueryKey,
   getMoneySummary,
+  type MoneyInstallmentPlan,
   type MoneyAccount,
   type MoneyCategory,
   type MoneyPayee,
   type MoneyTransaction,
 } from "../api";
-import { useMoneyCatalog, useMoneyTransactions } from "../hooks";
+import { invalidateMoneyQueries, useMoneyCatalog, useMoneyInstallmentPlans, useMoneyTransactions } from "../hooks";
 import { MoneyFloatingAction } from "./money-floating-action";
 import { MoneySelectField } from "./money-select-field";
 import { TransactionDrawer } from "./transaction-drawer";
@@ -49,6 +52,20 @@ import {
 } from "../utils";
 
 type RangeMode = "month" | "custom" | "all";
+type MoneyView = "ledger" | "recurring" | "installments";
+
+type MoneyViewTab = {
+  value: MoneyView;
+  label: string;
+  icon: LucideIcon;
+  disabled?: boolean;
+};
+
+const moneyViewTabs: MoneyViewTab[] = [
+  { value: "ledger", label: "Ledger", icon: ReceiptText },
+  { value: "recurring", label: "Recurring", icon: Repeat2, disabled: true },
+  { value: "installments", label: "Installments", icon: CreditCard },
+];
 
 type ActiveFilter = {
   id: string;
@@ -77,6 +94,11 @@ function TransactionRow({
   const mode = transactionMode(transaction, categories);
   const account = accountPostings[0]?.account_id ? accountById.get(accountPostings[0].account_id) : undefined;
   const category = categoryPosting?.category_id ? categoryById.get(categoryPosting.category_id) : undefined;
+  const isCardPayment = mode === "transfer" && accountPostings.some((posting) => {
+    const postingAccount = posting.account_id ? accountById.get(posting.account_id) : undefined;
+    return postingAccount?.account_type === "credit_card";
+  });
+  const isInstallmentCharge = transaction.name.includes(" · Installment ");
   const currencyCode = accountPostings[0]?.currency_code ?? "PHP";
   const reconciliation = accountPostings.length === 0
     ? "—"
@@ -92,7 +114,11 @@ function TransactionRow({
   const supportingText = [
     payee?.name,
     transaction.memo,
-    mode === "transfer" ? transferLabel || "Account transfer" : category?.name ?? "Uncategorized",
+    isInstallmentCharge
+      ? "Installment charge"
+      : mode === "transfer"
+        ? isCardPayment ? "Card payment" : transferLabel || "Account transfer"
+        : category?.name ?? "Uncategorized",
   ].filter(Boolean).join(" · ");
 
   return (
@@ -108,7 +134,7 @@ function TransactionRow({
           <span className="mt-1 block truncate text-xs text-muted-foreground">{supportingText || "No additional context"}</span>
         </span>
         <span className="min-w-0 text-xs text-muted-foreground">
-          <span className="block truncate">{mode === "transfer" ? transferLabel || "Transfer" : category?.name ?? "No category"}</span>
+          <span className="block truncate">{isInstallmentCharge ? "Installment charge" : mode === "transfer" ? isCardPayment ? "Card payment" : transferLabel || "Transfer" : category?.name ?? "No category"}</span>
           <span className="mt-1 block truncate">{account ? accountLabel(account) : "Multiple accounts"}</span>
         </span>
         <span className="font-mono text-[0.65rem] uppercase tracking-[0.08em] text-muted-foreground">{reconciliation}</span>
@@ -134,6 +160,215 @@ function ActiveFilterChip({ filter }: { filter: ActiveFilter }) {
         <X aria-hidden="true" className="size-3.5" />
       </button>
     </Badge>
+  );
+}
+
+function installmentDateLabel(value: string | null) {
+  if (!value) return "None scheduled";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(`${value}T00:00:00`));
+}
+
+function installmentStatusLabel(status: MoneyInstallmentPlan["status"]) {
+  return status === "active" ? "Active" : status === "completed" ? "Completed" : "Cancelled";
+}
+
+function InstallmentPlansSection({
+  plans,
+  accounts,
+  isPending,
+  isError,
+  error,
+  onRetry,
+}: {
+  plans: MoneyInstallmentPlan[];
+  accounts: MoneyAccount[];
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  onRetry: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [expandedPlanId, setExpandedPlanId] = useState<string | null>(null);
+  const cancelMutation = useMutation({
+    mutationFn: cancelMoneyInstallmentPlan,
+    onSuccess: () => invalidateMoneyQueries(queryClient),
+  });
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+
+  return (
+    <section aria-labelledby="installment-plans-title" className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-none">
+      <div className="flex flex-col gap-2 border-b border-border/70 px-4 py-4 sm:flex-row sm:items-end sm:justify-between sm:px-5">
+        <div>
+          <div className="flex items-center gap-2">
+            <CreditCard aria-hidden="true" className="size-4 text-primary-strong" />
+            <p className="font-mono text-[0.64rem] uppercase tracking-[0.16em] text-muted-foreground">Card commitments</p>
+          </div>
+          <h2 id="installment-plans-title" className="mt-1 text-lg font-medium">Installment plans</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Charges appear in the ledger as each statement closes. Payments are tracked separately.</p>
+        </div>
+        <span className="text-xs text-muted-foreground">{plans.length} plan{plans.length === 1 ? "" : "s"}</span>
+      </div>
+      {isPending ? <div className="space-y-3 p-5" aria-label="Loading installment plans"><div className="h-16 animate-pulse rounded-lg bg-muted" /><div className="h-16 animate-pulse rounded-lg bg-muted" /></div> : null}
+      {isError ? (
+        <div role="alert" className="p-6 text-center">
+          <p className="text-sm text-destructive">Installment plans could not load.</p>
+          <p className="mt-2 text-sm text-muted-foreground">{describeMoneyError(error)}</p>
+          <Button type="button" variant="outline" size="sm" className="mt-4" onClick={onRetry}>Try again</Button>
+        </div>
+      ) : null}
+      {!isPending && !isError && !plans.length ? (
+        <div className="p-6 text-center">
+          <CreditCard aria-hidden="true" className="mx-auto size-7 text-primary-strong" />
+          <p className="mt-3 text-sm font-medium">No installment plans yet.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Choose Installment purchase when adding a credit-card transaction.</p>
+        </div>
+      ) : null}
+      {plans.length ? (
+        <div className="divide-y divide-border/70">
+          {plans.map((plan) => {
+            const account = accountById.get(plan.account_id);
+            const expanded = expandedPlanId === plan.id;
+            const canCancel = plan.status === "active" && plan.charged_count < plan.term_months;
+            return (
+              <article key={plan.id} className="px-4 py-4 sm:px-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                    onClick={() => setExpandedPlanId(expanded ? null : plan.id)}
+                  >
+                    <ChevronDown aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} />
+                    <span className="min-w-0">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-sm font-medium">{plan.name}</span>
+                        <Badge variant={plan.status === "active" ? "secondary" : "outline"} className="rounded-full text-[0.65rem]">{installmentStatusLabel(plan.status)}</Badge>
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-muted-foreground">{account ? accountLabel(account) : "Unknown card"}</span>
+                    </span>
+                  </button>
+                  {canCancel ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={cancelMutation.isPending}
+                      onClick={() => cancelMutation.mutate(plan.id)}
+                    >
+                      {cancelMutation.isPending && cancelMutation.variables === plan.id ? "Cancelling…" : "Cancel future charges"}
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
+                  <div><p className="text-xs text-muted-foreground">Charged months</p><p className="mt-1 font-mono font-medium">{plan.charged_count} of {plan.term_months}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Next statement charge</p><p className="mt-1 font-mono font-medium">{plan.next_charge_date ? `${installmentDateLabel(plan.next_charge_date)} · ${formatMoney(plan.next_charge_amount ?? "0", plan.currency_code)}` : "None scheduled"}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Remaining scheduled</p><p className="mt-1 font-mono font-medium">{formatMoney(plan.remaining_amount, plan.currency_code)}</p></div>
+                  <div><p className="text-xs text-muted-foreground">Card</p><p className="mt-1 truncate font-medium">{account ? accountLabel(account) : "Unknown card"}</p></div>
+                </div>
+                {expanded ? (
+                  <div className="mt-4 rounded-lg border border-border/70 bg-background/60 p-3">
+                    <p className="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-muted-foreground">Statement charge schedule</p>
+                    <ul className="mt-2 divide-y divide-border/60">
+                      {plan.occurrences.map((occurrence) => (
+                        <li key={occurrence.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                          <span>Installment {occurrence.sequence_number} of {plan.term_months}</span>
+                          <span className="text-right"><span className="block font-mono">{formatMoney(occurrence.amount, plan.currency_code)}</span><span className="block text-xs text-muted-foreground">{installmentDateLabel(occurrence.charge_date)} · {occurrence.status}</span></span>
+                        </li>
+                      ))}
+                    </ul>
+                    {cancelMutation.isError && cancelMutation.variables === plan.id ? <p role="alert" className="mt-3 text-sm text-destructive">{describeMoneyError(cancelMutation.error)}</p> : null}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function MoneyViewTabs({
+  activeView,
+  onViewChange,
+}: {
+  activeView: MoneyView;
+  onViewChange: (view: MoneyView) => void;
+}) {
+  const tabRefs = useRef<Partial<Record<MoneyView, HTMLButtonElement | null>>>({});
+  const enabledTabs = moneyViewTabs.filter((tab) => !tab.disabled);
+
+  function focusTab(view: MoneyView) {
+    const tab = moneyViewTabs.find((item) => item.value === view);
+    if (!tab || tab.disabled) return;
+    onViewChange(view);
+    requestAnimationFrame(() => tabRefs.current[view]?.focus());
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      nextIndex = (index + 1) % enabledTabs.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      nextIndex = (index - 1 + enabledTabs.length) % enabledTabs.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = enabledTabs.length - 1;
+    }
+
+    if (nextIndex === null) return;
+
+    event.preventDefault();
+    focusTab(enabledTabs[nextIndex].value);
+  }
+
+  return (
+    <div role="tablist" aria-label="Transaction views" aria-orientation="horizontal" className="flex gap-1 overflow-x-auto border-b border-border/70 pb-px">
+      {moneyViewTabs.map((tab) => {
+        const selected = tab.value === activeView;
+        const Icon = tab.icon;
+        const enabledIndex = enabledTabs.findIndex((item) => item.value === tab.value);
+
+        return (
+          <button
+            key={tab.value}
+            ref={(element) => {
+              tabRefs.current[tab.value] = element;
+            }}
+            type="button"
+            role="tab"
+            id={`money-view-${tab.value}`}
+            aria-selected={selected}
+            aria-controls="money-view-panel"
+            aria-disabled={tab.disabled || undefined}
+            tabIndex={tab.disabled ? -1 : selected ? 0 : -1}
+            disabled={tab.disabled}
+            onClick={() => {
+              if (!tab.disabled) onViewChange(tab.value);
+            }}
+            onKeyDown={(event) => {
+              if (enabledIndex >= 0) handleKeyDown(event, enabledIndex);
+            }}
+            className={cn(
+              "relative flex min-h-11 shrink-0 items-center gap-2 rounded-t-md px-3 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:z-10 focus-visible:ring-3 focus-visible:ring-ring/50 sm:px-4",
+              selected && "text-foreground",
+              tab.disabled && "cursor-not-allowed opacity-55 hover:bg-transparent hover:text-muted-foreground",
+            )}
+          >
+            <Icon aria-hidden="true" className={cn("size-4", selected ? "text-primary-strong" : "text-muted-foreground")} />
+            <span>{tab.label}</span>
+            {tab.disabled ? <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.08em] text-muted-foreground">Coming soon</span> : null}
+            <span aria-hidden="true" className={cn("absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-transparent transition-colors sm:inset-x-3", selected && "bg-primary")} />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -256,7 +491,9 @@ function TransactionsWorkspace() {
   const [search, setSearch] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTransactionId, setDrawerTransactionId] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<MoneyView>("ledger");
   const catalog = useMoneyCatalog();
+  const installmentPlansQuery = useMoneyInstallmentPlans();
 
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), 250);
@@ -280,6 +517,7 @@ function TransactionsWorkspace() {
     queryFn: () => getMoneySummary(period, currencyCode),
   });
   const transactions = transactionsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const installmentPlans = installmentPlansQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const currencyOptions = [...new Set(["PHP", ...catalog.accounts.map((account) => account.currency_code)])];
   const rangeLabel = rangeMode === "month" ? periodLabel(period) : rangeMode === "custom" ? `${dateFrom || "Start"}–${dateTo || "End"}` : "All history";
 
@@ -356,7 +594,9 @@ function TransactionsWorkspace() {
         </div>
       ) : null}
 
-      <section aria-labelledby="transaction-list-title" className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-none">
+      <MoneyViewTabs activeView={activeView} onViewChange={setActiveView} />
+
+      {activeView === "ledger" ? <section id="money-view-panel" role="tabpanel" aria-labelledby="money-view-ledger" aria-label="Ledger" tabIndex={0} className="overflow-hidden rounded-xl border border-border/80 bg-card shadow-none outline-none focus-visible:ring-3 focus-visible:ring-ring/40">
         <div className="space-y-4 px-4 py-4 sm:px-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -413,9 +653,20 @@ function TransactionsWorkspace() {
         {transactionsQuery.isSuccess && !transactions.length ? <div className="p-8 text-center"><ReceiptText aria-hidden="true" className="mx-auto size-7 text-primary-strong" /><h3 className="mt-3 text-sm font-medium">No transactions in this view.</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">Try another search or filter combination.</p></div> : null}
         {transactions.length ? <ul aria-label="Money transactions" className="divide-y divide-border/70">{transactions.map((transaction) => <TransactionRow key={transaction.id} transaction={transaction} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} onOpen={() => openTransaction(transaction.id)} />)}</ul> : null}
         {transactionsQuery.hasNextPage ? <div className="border-t border-border/70 p-3"><Button type="button" variant="outline" className="w-full" disabled={transactionsQuery.isFetchingNextPage} onClick={() => void transactionsQuery.fetchNextPage()}>{transactionsQuery.isFetchingNextPage ? "Loading more…" : "Load more transactions"}</Button></div> : null}
-      </section>
+      </section> : null}
 
-      <TransactionDrawer open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setDrawerTransactionId(null); }} transactionId={drawerTransactionId} defaultDate={new Date().toISOString().slice(0, 10)} defaultCurrencyCode={currencyCode} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} />
+      {activeView === "installments" ? <section id="money-view-panel" role="tabpanel" aria-labelledby="money-view-installments" tabIndex={0} className="outline-none focus-visible:ring-3 focus-visible:ring-ring/40">
+        <InstallmentPlansSection
+          plans={installmentPlans}
+          accounts={catalog.accounts}
+          isPending={installmentPlansQuery.isPending}
+          isError={installmentPlansQuery.isError}
+          error={installmentPlansQuery.error}
+          onRetry={() => void installmentPlansQuery.refetch()}
+        />
+      </section> : null}
+
+      <TransactionDrawer open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setDrawerTransactionId(null); }} transactionId={drawerTransactionId} defaultDate={currentLocalDateInput()} defaultCurrencyCode={currencyCode} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} />
       <MoneyFloatingAction onClick={openCreate} />
     </div>
   );
