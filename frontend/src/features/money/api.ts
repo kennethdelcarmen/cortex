@@ -39,6 +39,22 @@ export const moneyInstallmentOccurrenceStateSchema = z.enum([
   "charged",
   "cancelled",
 ]);
+export const moneyRecurrenceFrequencySchema = z.enum(["weekly", "monthly", "yearly"]);
+export const moneyRecurrenceStateSchema = z.enum(["active", "paused", "ended"]);
+export const moneyRecurrenceWeekdaySchema = z.enum([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]);
+export const moneyRecurringOccurrenceStateSchema = z.enum([
+  "scheduled",
+  "posted",
+  "skipped",
+]);
 
 export const moneyAccountSchema = z.object({
   id: z.string().min(1),
@@ -161,6 +177,54 @@ export const moneyInstallmentProcessSchema = z.object({
   processed_count: z.number().int().nonnegative(),
 });
 
+export const moneyRecurrenceSchema = z.object({
+  timezone: z.string().min(1),
+  frequency: moneyRecurrenceFrequencySchema,
+  interval: z.number().int().positive(),
+  weekdays: z.array(moneyRecurrenceWeekdaySchema),
+  month_day: z.number().int().min(1).max(31).nullable(),
+  month: z.number().int().min(1).max(12).nullable(),
+  day: z.number().int().min(1).max(31).nullable(),
+  until_date: z.string().nullable(),
+  occurrence_count: z.number().int().positive().nullable(),
+});
+
+export const moneyRecurringPostingSchema = z.object({
+  id: z.string().min(1),
+  account_id: z.string().min(1).nullable(),
+  category_id: z.string().min(1).nullable(),
+  currency_code: z.string().length(3),
+  amount: z.string().min(1),
+});
+
+export const moneyRecurringOccurrenceSchema = z.object({
+  id: z.string().min(1),
+  sequence_number: z.number().int().positive(),
+  due_date: z.string().min(1),
+  status: moneyRecurringOccurrenceStateSchema,
+  transaction_id: z.string().nullable(),
+  processed_at: z.string().nullable(),
+});
+
+export const moneyRecurringTransactionSchema = z.object({
+  id: z.string().min(1),
+  start_date: z.string().min(1),
+  name: z.string().min(1),
+  payee_id: z.string().min(1).nullable(),
+  memo: z.string().nullable(),
+  recurrence: moneyRecurrenceSchema,
+  state: moneyRecurrenceStateSchema,
+  next_occurrence_date: z.string().nullable(),
+  next_occurrence_number: z.number().int().positive().nullable(),
+  posted_count: z.number().int().nonnegative(),
+  postings: z.array(moneyRecurringPostingSchema),
+  occurrences: z.array(moneyRecurringOccurrenceSchema),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+  paused_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+});
+
 const listResponse = <T extends z.ZodType>(itemSchema: T) =>
   z.object({
     items: z.array(itemSchema),
@@ -173,6 +237,7 @@ const moneyCategoryListSchema = listResponse(moneyCategorySchema);
 const moneyBudgetListSchema = listResponse(moneyBudgetSchema);
 const moneyTransactionListSchema = listResponse(moneyTransactionSchema);
 const moneyInstallmentPlanListSchema = listResponse(moneyInstallmentPlanSchema);
+const moneyRecurringTransactionListSchema = listResponse(moneyRecurringTransactionSchema);
 
 export type MoneyAccount = z.infer<typeof moneyAccountSchema>;
 export type MoneyPayee = z.infer<typeof moneyPayeeSchema>;
@@ -188,6 +253,14 @@ export type MoneyTransactionListPage = z.infer<typeof moneyTransactionListSchema
 export type MoneyInstallmentPlan = z.infer<typeof moneyInstallmentPlanSchema>;
 export type MoneyInstallmentOccurrence = z.infer<typeof moneyInstallmentOccurrenceSchema>;
 export type MoneyInstallmentPlanState = z.infer<typeof moneyInstallmentPlanStateSchema>;
+export type MoneyRecurrence = z.infer<typeof moneyRecurrenceSchema>;
+export type MoneyRecurrenceFrequency = z.infer<typeof moneyRecurrenceFrequencySchema>;
+export type MoneyRecurrenceState = z.infer<typeof moneyRecurrenceStateSchema>;
+export type MoneyRecurrenceWeekday = z.infer<typeof moneyRecurrenceWeekdaySchema>;
+export type MoneyRecurringOccurrence = z.infer<typeof moneyRecurringOccurrenceSchema>;
+export type MoneyRecurringPosting = z.infer<typeof moneyRecurringPostingSchema>;
+export type MoneyRecurringTransaction = z.infer<typeof moneyRecurringTransactionSchema>;
+export type MoneyRecurringTransactionListPage = z.infer<typeof moneyRecurringTransactionListSchema>;
 
 export type MoneyAccountCreateInput = {
   name: string;
@@ -244,6 +317,42 @@ export type MoneyBudgetUpsertInput = {
   amount: string;
 };
 
+export type MoneyRecurrenceInput = {
+  timezone: string;
+  frequency: MoneyRecurrenceFrequency;
+  interval: number;
+  weekdays?: MoneyRecurrenceWeekday[];
+  month_day?: number | null;
+  month?: number | null;
+  day?: number | null;
+  until_date?: string | null;
+  occurrence_count?: number | null;
+};
+
+export type MoneyRecurringPostingInput = {
+  account_id?: string;
+  category_id?: string;
+  currency_code: string;
+  amount: string;
+};
+
+export type MoneyRecurringTransactionCreateInput = {
+  start_date: string;
+  name: string;
+  payee_id?: string | null;
+  memo?: string | null;
+  recurrence: MoneyRecurrenceInput;
+  postings: MoneyRecurringPostingInput[];
+};
+
+export type MoneyRecurringTransactionUpdateInput = {
+  name?: string;
+  payee_id?: string | null;
+  memo?: string | null;
+  recurrence?: MoneyRecurrenceInput;
+  postings?: MoneyRecurringPostingInput[];
+};
+
 export type MoneyTransactionFilters = {
   dateFrom?: string;
   dateTo?: string;
@@ -264,6 +373,7 @@ export const moneyBudgetsQueryKey = [...moneyQueryKey, "budgets"] as const;
 export const moneyTransactionsQueryKey = [...moneyQueryKey, "transactions"] as const;
 export const moneySummaryQueryKey = [...moneyQueryKey, "summary"] as const;
 export const moneyInstallmentPlansQueryKey = [...moneyQueryKey, "installment-plans"] as const;
+export const moneyRecurringTransactionsQueryKey = [...moneyQueryKey, "recurring-transactions"] as const;
 
 function addListParams(
   params: URLSearchParams,
@@ -407,6 +517,76 @@ export function processDueMoneyInstallments() {
     { method: "POST" },
     moneyInstallmentProcessSchema,
   );
+}
+
+export function listMoneyRecurringTransactions(options: {
+  state?: MoneyRecurrenceState;
+  accountId?: string;
+  search?: string;
+  cursor?: string;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 50));
+  if (options.state) params.set("state", options.state);
+  if (options.accountId) params.set("account_id", options.accountId);
+  if (options.search?.trim()) params.set("search", options.search.trim());
+  if (options.cursor) params.set("cursor", options.cursor);
+  return apiFetch(
+    `/api/v1/money/recurring-transactions?${params}`,
+    {},
+    moneyRecurringTransactionListSchema,
+  );
+}
+
+export function getMoneyRecurringTransaction(recurringTransactionId: string) {
+  return apiFetch(
+    `/api/v1/money/recurring-transactions/${encodeURIComponent(recurringTransactionId)}`,
+    {},
+    moneyRecurringTransactionSchema,
+  );
+}
+
+export function createMoneyRecurringTransaction(payload: MoneyRecurringTransactionCreateInput) {
+  return apiFetch(
+    "/api/v1/money/recurring-transactions",
+    { method: "POST", body: JSON.stringify(payload) },
+    moneyRecurringTransactionSchema,
+  );
+}
+
+export function updateMoneyRecurringTransaction(
+  recurringTransactionId: string,
+  payload: MoneyRecurringTransactionUpdateInput,
+) {
+  return apiFetch(
+    `/api/v1/money/recurring-transactions/${encodeURIComponent(recurringTransactionId)}`,
+    { method: "PATCH", body: JSON.stringify(payload) },
+    moneyRecurringTransactionSchema,
+  );
+}
+
+function mutateMoneyRecurringTransaction(
+  recurringTransactionId: string,
+  action: "pause" | "resume" | "end",
+) {
+  return apiFetch(
+    `/api/v1/money/recurring-transactions/${encodeURIComponent(recurringTransactionId)}/${action}`,
+    { method: "POST" },
+    moneyRecurringTransactionSchema,
+  );
+}
+
+export function pauseMoneyRecurringTransaction(recurringTransactionId: string) {
+  return mutateMoneyRecurringTransaction(recurringTransactionId, "pause");
+}
+
+export function resumeMoneyRecurringTransaction(recurringTransactionId: string) {
+  return mutateMoneyRecurringTransaction(recurringTransactionId, "resume");
+}
+
+export function endMoneyRecurringTransaction(recurringTransactionId: string) {
+  return mutateMoneyRecurringTransaction(recurringTransactionId, "end");
 }
 
 export function upsertMoneyBudget(

@@ -8,8 +8,10 @@ import {
   listMoneyPayees,
   listMoneyTransactions,
   listMoneyInstallmentPlans,
+  listMoneyRecurringTransactions,
   getMoneySummary,
   type MoneyCategory,
+  type MoneyRecurrenceState,
   type MoneyTransactionFilters,
 } from "./api";
 import {
@@ -20,6 +22,7 @@ import {
   moneySummaryQueryKey,
   moneyTransactionsQueryKey,
   moneyInstallmentPlansQueryKey,
+  moneyRecurringTransactionsQueryKey,
 } from "./api";
 
 function flattenPages<T>(pages: Array<{ items: T[] }> | undefined) {
@@ -124,6 +127,32 @@ export function useMoneyInstallmentPlans(accountId?: string) {
   });
 }
 
+export function useMoneyRecurringTransactions(options: {
+  state?: MoneyRecurrenceState;
+  accountId?: string;
+  search?: string;
+} = {}) {
+  const search = options.search?.trim() ?? "";
+
+  return useInfiniteQuery({
+    queryKey: [
+      ...moneyRecurringTransactionsQueryKey,
+      "list",
+      { state: options.state, accountId: options.accountId, search },
+    ],
+    queryFn: ({ pageParam }: { pageParam: string }) =>
+      listMoneyRecurringTransactions({
+        state: options.state,
+        accountId: options.accountId,
+        search: search || undefined,
+        cursor: pageParam,
+        limit: 50,
+      }),
+    initialPageParam: "",
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+  });
+}
+
 export function useMoneySummary(period: string, currencyCode: string) {
   return useQuery({
     queryKey: [...moneySummaryQueryKey, period, currencyCode],
@@ -144,6 +173,7 @@ export function invalidateMoneyQueries(queryClient: QueryClient) {
     queryClient.invalidateQueries({ queryKey: moneyBudgetsQueryKey }),
     queryClient.invalidateQueries({ queryKey: moneySummaryQueryKey }),
     queryClient.invalidateQueries({ queryKey: moneyInstallmentPlansQueryKey }),
+    queryClient.invalidateQueries({ queryKey: moneyRecurringTransactionsQueryKey }),
   ]);
 }
 

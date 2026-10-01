@@ -35,6 +35,7 @@ import {
 import { invalidateMoneyQueries, useMoneyCatalog, useMoneyInstallmentPlans, useMoneyTransactions } from "../hooks";
 import { MoneyFloatingAction } from "./money-floating-action";
 import { MoneySelectField } from "./money-select-field";
+import { RecurringTransactionsSection } from "./recurring-transactions-section";
 import { TransactionDrawer } from "./transaction-drawer";
 import {
   accountLabel,
@@ -63,7 +64,7 @@ type MoneyViewTab = {
 
 const moneyViewTabs: MoneyViewTab[] = [
   { value: "ledger", label: "Ledger", icon: ReceiptText },
-  { value: "recurring", label: "Recurring", icon: Repeat2, disabled: true },
+  { value: "recurring", label: "Recurring", icon: Repeat2 },
   { value: "installments", label: "Installments", icon: CreditCard },
 ];
 
@@ -666,8 +667,16 @@ function TransactionsWorkspace() {
         />
       </section> : null}
 
+      {activeView === "recurring" ? (
+        <RecurringTransactionsSection
+          accounts={catalog.accounts}
+          payees={catalog.payees}
+          categories={catalog.categories}
+        />
+      ) : null}
+
       <TransactionDrawer open={drawerOpen} onOpenChange={(open) => { setDrawerOpen(open); if (!open) setDrawerTransactionId(null); }} transactionId={drawerTransactionId} defaultDate={currentLocalDateInput()} defaultCurrencyCode={currencyCode} accounts={catalog.accounts} payees={catalog.payees} categories={catalog.categories} />
-      <MoneyFloatingAction onClick={openCreate} />
+      {activeView !== "recurring" ? <MoneyFloatingAction onClick={openCreate} /> : null}
     </div>
   );
 }
