@@ -69,6 +69,34 @@ class InstallmentOccurrenceState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class MoneyRecurrenceFrequency(StrEnum):
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+class MoneyRecurrenceState(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    ENDED = "ended"
+
+
+class MoneyRecurrenceWeekday(StrEnum):
+    MONDAY = "monday"
+    TUESDAY = "tuesday"
+    WEDNESDAY = "wednesday"
+    THURSDAY = "thursday"
+    FRIDAY = "friday"
+    SATURDAY = "saturday"
+    SUNDAY = "sunday"
+
+
+class RecurringOccurrenceState(StrEnum):
+    SCHEDULED = "scheduled"
+    POSTED = "posted"
+    SKIPPED = "skipped"
+
+
 def normalize_name(value: str) -> str:
     normalized = " ".join(value.strip().split()).casefold()
     if not normalized:
@@ -330,6 +358,43 @@ class TransactionReverseRequest(BaseModel):
         return normalized or None
 
 
+class MoneyRecurrenceRequest(BaseModel):
+    timezone: str = Field(min_length=1, max_length=64)
+    frequency: MoneyRecurrenceFrequency
+    interval: int = Field(default=1, ge=1, le=365)
+    weekdays: list[MoneyRecurrenceWeekday] = Field(default_factory=list, max_length=7)
+    month_day: int | None = Field(default=None, ge=1, le=31)
+    month: int | None = Field(default=None, ge=1, le=12)
+    day: int | None = Field(default=None, ge=1, le=31)
+    until_date: date | None = None
+    occurrence_count: int | None = Field(default=None, ge=1, le=100_000)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone_name(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_selectors(self) -> MoneyRecurrenceRequest:
+        if len(set(self.weekdays)) != len(self.weekdays):
+            raise ValueError("weekly recurrence weekdays must be unique")
+        if self.frequency == MoneyRecurrenceFrequency.WEEKLY and not self.weekdays:
+            raise ValueError("weekly recurrence requires at least one weekday")
+        if self.frequency != MoneyRecurrenceFrequency.WEEKLY and self.weekdays:
+            raise ValueError("weekdays are only valid for weekly recurrence")
+        if self.frequency != MoneyRecurrenceFrequency.MONTHLY and self.month_day is not None:
+            raise ValueError("month_day is only valid for monthly recurrence")
+        if self.frequency != MoneyRecurrenceFrequency.YEARLY and (
+            self.month is not None or self.day is not None
+        ):
+            raise ValueError("month and day are only valid for yearly recurrence")
+        if (self.month is None) != (self.day is None):
+            raise ValueError("yearly recurrence requires both month and day")
+        if self.until_date is not None and self.occurrence_count is not None:
+            raise ValueError("until_date and occurrence_count cannot both be set")
+        return self
+
+
 class InstallmentPlanCreateRequest(BaseModel):
     account_id: str
     currency_code: str = Field(min_length=3, max_length=3)
@@ -377,6 +442,49 @@ class InstallmentPlanCreateRequest(BaseModel):
         except (InvalidCurrencyError, InvalidMoneyAmountError) as exc:
             raise ValueError(exc.message) from exc
         return self
+
+
+class RecurringTransactionCreateRequest(BaseModel):
+    start_date: date
+    name: str = Field(min_length=1, max_length=200)
+    payee_id: str | None = None
+    memo: str | None = Field(default=None, max_length=10_000)
+    recurrence: MoneyRecurrenceRequest
+    postings: list[PostingRequest] = Field(min_length=2, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return normalize_transaction_name(value)
+
+    @field_validator("memo")
+    @classmethod
+    def validate_memo(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class RecurringTransactionUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    payee_id: str | None = None
+    memo: str | None = Field(default=None, max_length=10_000)
+    recurrence: MoneyRecurrenceRequest | None = None
+    postings: list[PostingRequest] | None = Field(default=None, min_length=2, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        return normalize_transaction_name(value) if value is not None else None
+
+    @field_validator("memo")
+    @classmethod
+    def validate_memo(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class AccountResponse(BaseModel):
@@ -528,3 +636,49 @@ class InstallmentPlanListResponse(BaseModel):
 
 class InstallmentProcessResponse(BaseModel):
     processed_count: int
+
+
+class RecurringPostingResponse(BaseModel):
+    id: str
+    account_id: str | None
+    category_id: str | None
+    currency_code: str
+    amount: str
+
+
+class RecurringOccurrenceResponse(BaseModel):
+    id: str
+    sequence_number: int
+    due_date: date
+    status: RecurringOccurrenceState
+    transaction_id: str | None
+    processed_at: datetime | None
+
+
+class RecurringTransactionResponse(BaseModel):
+    id: str
+    start_date: date
+    name: str
+    payee_id: str | None
+    memo: str | None
+    recurrence: MoneyRecurrenceRequest
+    state: MoneyRecurrenceState
+    next_occurrence_date: date | None
+    next_occurrence_number: int | None
+    posted_count: int
+    postings: list[RecurringPostingResponse]
+    occurrences: list[RecurringOccurrenceResponse]
+    created_at: datetime
+    updated_at: datetime
+    paused_at: datetime | None
+    ended_at: datetime | None
+
+
+class RecurringTransactionListResponse(BaseModel):
+    items: list[RecurringTransactionResponse]
+    next_cursor: str | None
+
+
+class RecurringProcessResponse(BaseModel):
+    processed_count: int
+    failed_count: int

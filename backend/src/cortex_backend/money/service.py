@@ -11,11 +11,19 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_DOWN, Decimal
+from typing import cast
 from uuid import uuid4
 
 from sqlalchemy import delete, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..recurrence import (
+    CalendarOccurrence,
+    iter_calendar_occurrences,
+    local_date,
+    next_calendar_occurrence,
+    timezone_or_error,
+)
 from ..storage import DatabaseStorage
 from .errors import (
     AccountNotFoundError,
@@ -31,8 +39,11 @@ from .errors import (
     InvalidMoneyQueryError,
     InvalidPostingTargetError,
     InvalidReconciliationTransitionError,
+    InvalidRecurringTransactionError,
     PayeeNotFoundError,
     PostingNotFoundError,
+    RecurringTransactionNotFoundError,
+    RecurringTransactionStateError,
     ReversalNotAllowedError,
     TransactionLockedError,
     TransactionNotFoundError,
@@ -48,6 +59,9 @@ from .models import (
     MoneyInstallmentPlan,
     MoneyPayee,
     MoneyPosting,
+    MoneyRecurringOccurrence,
+    MoneyRecurringPosting,
+    MoneyRecurringTransaction,
     MoneyTransaction,
 )
 from .schemas import (
@@ -62,10 +76,16 @@ from .schemas import (
     InstallmentOccurrenceState,
     InstallmentPlanCreateRequest,
     InstallmentPlanState,
+    MoneyRecurrenceFrequency,
+    MoneyRecurrenceState,
+    MoneyRecurrenceWeekday,
     PayeeCreateRequest,
     PayeeUpdateRequest,
     PostingRequest,
     ReconciliationState,
+    RecurringOccurrenceState,
+    RecurringTransactionCreateRequest,
+    RecurringTransactionUpdateRequest,
     TransactionCreateRequest,
     TransactionReverseRequest,
     TransactionState,
@@ -207,6 +227,53 @@ class InstallmentPlanRecord:
 
 
 @dataclass(frozen=True)
+class RecurringPostingRecord:
+    id: str
+    account_id: str | None
+    category_id: str | None
+    currency_code: str
+    amount: str
+
+
+@dataclass(frozen=True)
+class RecurringOccurrenceRecord:
+    id: str
+    sequence_number: int
+    due_date: date
+    status: RecurringOccurrenceState
+    transaction_id: str | None
+    processed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class RecurringTransactionRecord:
+    id: str
+    start_date: date
+    name: str
+    payee_id: str | None
+    memo: str | None
+    timezone: str
+    frequency: MoneyRecurrenceFrequency
+    interval: int
+    weekdays: list[MoneyRecurrenceWeekday]
+    month_day: int | None
+    month: int | None
+    day: int | None
+    until_date: date | None
+    occurrence_count: int | None
+    state: MoneyRecurrenceState
+    next_occurrence_date: date | None
+    next_occurrence_number: int | None
+    posted_count: int
+    postings: list[RecurringPostingRecord]
+    occurrences: list[RecurringOccurrenceRecord]
+    created_at: datetime
+    updated_at: datetime
+    paused_at: datetime | None
+    ended_at: datetime | None
+
+
+@dataclass(frozen=True)
 class AccountListFilters:
     include_archived: bool = False
     archived_only: bool = False
@@ -265,6 +332,15 @@ class InstallmentPlanListFilters:
 
 
 @dataclass(frozen=True)
+class RecurringTransactionListFilters:
+    state: MoneyRecurrenceState | None = None
+    account_id: str | None = None
+    search: str | None = None
+    limit: int = DEFAULT_LIMIT
+    cursor: str | None = None
+
+
+@dataclass(frozen=True)
 class AccountPage:
     items: list[AccountRecord]
     next_cursor: str | None
@@ -298,6 +374,18 @@ class TransactionPage:
 class InstallmentPlanPage:
     items: list[InstallmentPlanRecord]
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class RecurringTransactionPage:
+    items: list[RecurringTransactionRecord]
+    next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class RecurringProcessResult:
+    processed_count: int
+    failed_count: int
 
 
 def _utc_now() -> datetime:
@@ -566,6 +654,96 @@ async def _installment_plan_record(
     )
 
 
+def _recurring_rule_values(schedule: MoneyRecurringTransaction) -> dict[str, object]:
+    return {
+        "timezone": schedule.timezone,
+        "frequency": schedule.rule["frequency"],
+        "interval": schedule.rule.get("interval", 1),
+        "weekdays": schedule.rule.get("weekdays", []),
+        "month_day": schedule.rule.get("month_day"),
+        "month": schedule.rule.get("month"),
+        "day": schedule.rule.get("day"),
+        "until_date": schedule.until_date,
+        "occurrence_count": schedule.occurrence_count,
+    }
+
+
+async def _recurring_transaction_record(
+    db: AsyncSession, schedule: MoneyRecurringTransaction
+) -> RecurringTransactionRecord:
+    postings = list(
+        (
+            await db.execute(
+                select(MoneyRecurringPosting)
+                .where(MoneyRecurringPosting.recurring_transaction_id == schedule.id)
+                .order_by(MoneyRecurringPosting.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    occurrences = list(
+        (
+            await db.execute(
+                select(MoneyRecurringOccurrence)
+                .where(MoneyRecurringOccurrence.recurring_transaction_id == schedule.id)
+                .order_by(MoneyRecurringOccurrence.due_date.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    values = _recurring_rule_values(schedule)
+    raw_weekdays = cast(list[object], values["weekdays"])
+    return RecurringTransactionRecord(
+        id=schedule.id,
+        start_date=schedule.start_date,
+        name=schedule.name,
+        payee_id=schedule.payee_id,
+        memo=schedule.memo,
+        timezone=schedule.timezone,
+        frequency=MoneyRecurrenceFrequency(str(values["frequency"])),
+        interval=int(cast(int, values["interval"])),
+        weekdays=[MoneyRecurrenceWeekday(str(value)) for value in raw_weekdays],
+        month_day=cast(int | None, values["month_day"]),
+        month=cast(int | None, values["month"]),
+        day=cast(int | None, values["day"]),
+        until_date=schedule.until_date,
+        occurrence_count=schedule.occurrence_count,
+        state=MoneyRecurrenceState(schedule.state),
+        next_occurrence_date=schedule.next_occurrence_date,
+        next_occurrence_number=schedule.next_occurrence_number,
+        posted_count=sum(
+            item.status == RecurringOccurrenceState.POSTED.value for item in occurrences
+        ),
+        postings=[
+            RecurringPostingRecord(
+                id=item.id,
+                account_id=item.account_id,
+                category_id=item.category_id,
+                currency_code=item.currency_code,
+                amount=item.amount,
+            )
+            for item in postings
+        ],
+        occurrences=[
+            RecurringOccurrenceRecord(
+                id=item.id,
+                sequence_number=item.sequence_number,
+                due_date=item.due_date,
+                status=RecurringOccurrenceState(item.status),
+                transaction_id=item.transaction_id,
+                processed_at=_as_utc(item.processed_at),
+            )
+            for item in occurrences
+        ],
+        created_at=_as_utc(schedule.created_at) or schedule.created_at,
+        updated_at=_as_utc(schedule.updated_at) or schedule.updated_at,
+        paused_at=_as_utc(schedule.paused_at),
+        ended_at=_as_utc(schedule.ended_at),
+    )
+
+
 async def _account_balance(db: AsyncSession, account: MoneyAccount) -> Decimal:
     result = await db.execute(
         select(MoneyPosting.amount)
@@ -761,6 +939,22 @@ async def _get_transaction(db: AsyncSession, user_id: str, transaction_id: str) 
     if transaction is None:
         raise TransactionNotFoundError()
     return transaction
+
+
+async def _get_recurring_transaction(
+    db: AsyncSession, user_id: str, recurring_transaction_id: str
+) -> MoneyRecurringTransaction:
+    schedule = await db.scalar(
+        select(MoneyRecurringTransaction)
+        .where(
+            MoneyRecurringTransaction.id == recurring_transaction_id,
+            MoneyRecurringTransaction.user_id == user_id,
+        )
+        .limit(1)
+    )
+    if schedule is None:
+        raise RecurringTransactionNotFoundError()
+    return schedule
 
 
 async def _postings_for_transaction(db: AsyncSession, transaction_id: str) -> list[MoneyPosting]:
@@ -1285,6 +1479,35 @@ async def _validate_payee(db: AsyncSession, user_id: str, payee_id: str | None) 
         await _get_payee(db, user_id, payee_id, active_only=True)
 
 
+async def _create_transaction_in_session(
+    db: AsyncSession,
+    user_id: str,
+    payload: TransactionCreateRequest,
+    now: datetime,
+) -> tuple[MoneyTransaction, list[MoneyPosting]]:
+    await _validate_payee(db, user_id, payload.payee_id)
+    await _validate_postings(db, user_id, payload.postings)
+    transaction = MoneyTransaction(
+        id=str(uuid4()),
+        user_id=user_id,
+        transaction_date=payload.transaction_date,
+        name=payload.name,
+        payee_id=payload.payee_id,
+        memo=payload.memo,
+        state="posted",
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(transaction)
+    await db.flush()
+    postings = [
+        _posting_from_request(user_id, transaction.id, posting) for posting in payload.postings
+    ]
+    db.add_all(postings)
+    await db.flush()
+    return transaction, postings
+
+
 async def create_transaction(
     storage: DatabaseStorage,
     user_id: str,
@@ -1293,28 +1516,556 @@ async def create_transaction(
     now = _utc_now()
     async with storage.session() as db:
         async with db.begin():
+            transaction, postings = await _create_transaction_in_session(db, user_id, payload, now)
+            return _transaction_record(transaction, postings)
+
+
+def _recurrence_rule_payload(
+    payload: RecurringTransactionCreateRequest | RecurringTransactionUpdateRequest,
+) -> dict[str, object]:
+    assert payload.recurrence is not None
+    values = payload.recurrence.model_dump(mode="json")
+    values.pop("timezone", None)
+    values.pop("until_date", None)
+    values.pop("occurrence_count", None)
+    return values
+
+
+def _recurrence_parts(
+    schedule: MoneyRecurringTransaction,
+) -> tuple[str, int, tuple[int, ...], int | None, int | None, int | None]:
+    raw_weekdays = cast(list[object], schedule.rule.get("weekdays", []))
+    weekdays = tuple(
+        {
+            "monday": 0,
+            "tuesday": 1,
+            "wednesday": 2,
+            "thursday": 3,
+            "friday": 4,
+            "saturday": 5,
+            "sunday": 6,
+        }[str(value)]
+        for value in raw_weekdays
+    )
+    return (
+        str(schedule.rule["frequency"]),
+        int(cast(int, schedule.rule.get("interval", 1))),
+        weekdays,
+        cast(int | None, schedule.rule.get("month_day")),
+        cast(int | None, schedule.rule.get("month")),
+        cast(int | None, schedule.rule.get("day")),
+    )
+
+
+def _next_recurring_candidate(
+    schedule: MoneyRecurringTransaction, current_date: date
+) -> CalendarOccurrence | None:
+    frequency, interval, weekdays, month_day, month, day = _recurrence_parts(schedule)
+    return next_calendar_occurrence(
+        schedule.start_date,
+        frequency,
+        interval,
+        weekdays,
+        month_day,
+        month,
+        day,
+        schedule.until_date,
+        schedule.occurrence_count,
+        current_date,
+    )
+
+
+def _first_recurring_candidate(schedule: MoneyRecurringTransaction) -> CalendarOccurrence | None:
+    frequency, interval, weekdays, month_day, month, day = _recurrence_parts(schedule)
+    return next(
+        iter_calendar_occurrences(
+            schedule.start_date,
+            frequency,
+            interval,
+            weekdays,
+            month_day,
+            month,
+            day,
+            schedule.until_date,
+            schedule.occurrence_count,
+            limit=1,
+        ),
+        None,
+    )
+
+
+def _set_next_recurring_candidate(
+    schedule: MoneyRecurringTransaction, current_date: date, now: datetime
+) -> None:
+    candidate = _next_recurring_candidate(schedule, current_date)
+    if candidate is None:
+        schedule.next_occurrence_date = None
+        schedule.next_occurrence_number = None
+        schedule.state = MoneyRecurrenceState.ENDED.value
+        schedule.ended_at = now
+        return
+    schedule.next_occurrence_date = candidate.occurrence_date
+    schedule.next_occurrence_number = candidate.sequence_number
+
+
+async def _recurring_posting_requests(db: AsyncSession, schedule_id: str) -> list[PostingRequest]:
+    rows = list(
+        (
+            await db.execute(
+                select(MoneyRecurringPosting)
+                .where(MoneyRecurringPosting.recurring_transaction_id == schedule_id)
+                .order_by(MoneyRecurringPosting.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        PostingRequest(
+            account_id=row.account_id,
+            category_id=row.category_id,
+            currency_code=row.currency_code,
+            amount=row.amount,
+        )
+        for row in rows
+    ]
+
+
+async def _create_recurring_occurrence(
+    db: AsyncSession,
+    schedule: MoneyRecurringTransaction,
+    occurrence_date: date,
+    sequence_number: int,
+    status: str = RecurringOccurrenceState.SCHEDULED.value,
+) -> MoneyRecurringOccurrence:
+    occurrence = MoneyRecurringOccurrence(
+        id=str(uuid4()),
+        user_id=schedule.user_id,
+        recurring_transaction_id=schedule.id,
+        sequence_number=sequence_number,
+        due_date=occurrence_date,
+        status=status,
+    )
+    db.add(occurrence)
+    await db.flush()
+    return occurrence
+
+
+async def _ensure_next_recurring_occurrence(
+    db: AsyncSession, schedule: MoneyRecurringTransaction
+) -> None:
+    if schedule.next_occurrence_date is None:
+        return
+    existing = await db.scalar(
+        select(MoneyRecurringOccurrence).where(
+            MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+            MoneyRecurringOccurrence.due_date == schedule.next_occurrence_date,
+        )
+    )
+    if existing is None:
+        await _create_recurring_occurrence(
+            db,
+            schedule,
+            schedule.next_occurrence_date,
+            schedule.next_occurrence_number or 1,
+        )
+
+
+async def create_recurring_transaction(
+    storage: DatabaseStorage,
+    user_id: str,
+    payload: RecurringTransactionCreateRequest,
+) -> RecurringTransactionRecord:
+    now = _utc_now()
+    try:
+        timezone_or_error(payload.recurrence.timezone)
+    except ValueError:
+        raise InvalidRecurringTransactionError() from None
+    async with storage.session() as db:
+        async with db.begin():
             await _validate_payee(db, user_id, payload.payee_id)
             await _validate_postings(db, user_id, payload.postings)
-            transaction = MoneyTransaction(
+            schedule = MoneyRecurringTransaction(
                 id=str(uuid4()),
                 user_id=user_id,
-                transaction_date=payload.transaction_date,
+                start_date=payload.start_date,
                 name=payload.name,
                 payee_id=payload.payee_id,
                 memo=payload.memo,
-                state="posted",
+                timezone=payload.recurrence.timezone,
+                rule=_recurrence_rule_payload(payload),
+                until_date=payload.recurrence.until_date,
+                occurrence_count=payload.recurrence.occurrence_count,
+                state=MoneyRecurrenceState.ACTIVE.value,
                 created_at=now,
                 updated_at=now,
             )
-            db.add(transaction)
+            first = _first_recurring_candidate(schedule)
+            if first is None:
+                raise InvalidRecurringTransactionError()
+            schedule.next_occurrence_date = first.occurrence_date
+            schedule.next_occurrence_number = first.sequence_number
+            db.add(schedule)
             await db.flush()
-            postings = [
-                _posting_from_request(user_id, transaction.id, posting)
-                for posting in payload.postings
-            ]
-            db.add_all(postings)
+            db.add_all(
+                [
+                    MoneyRecurringPosting(
+                        id=str(uuid4()),
+                        user_id=user_id,
+                        recurring_transaction_id=schedule.id,
+                        account_id=posting.account_id,
+                        category_id=posting.category_id,
+                        currency_code=posting.currency_code,
+                        amount=posting.amount,
+                    )
+                    for posting in payload.postings
+                ]
+            )
             await db.flush()
-            return _transaction_record(transaction, postings)
+            await _create_recurring_occurrence(
+                db, schedule, first.occurrence_date, first.sequence_number
+            )
+            return await _recurring_transaction_record(db, schedule)
+
+
+async def get_recurring_transaction(
+    storage: DatabaseStorage, user_id: str, recurring_transaction_id: str
+) -> RecurringTransactionRecord:
+    async with storage.session() as db:
+        return await _recurring_transaction_record(
+            db, await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+        )
+
+
+async def list_recurring_transactions(
+    storage: DatabaseStorage, user_id: str, filters: RecurringTransactionListFilters
+) -> RecurringTransactionPage:
+    _validate_limit(filters.limit)
+    search = _normalize_transaction_search(filters.search)
+    fingerprint = _filter_fingerprint(
+        RecurringTransactionListFilters(
+            state=filters.state,
+            account_id=filters.account_id,
+            search=search,
+            limit=filters.limit,
+            cursor=None,
+        )
+    )
+    async with storage.session() as db:
+        statement = select(MoneyRecurringTransaction).where(
+            MoneyRecurringTransaction.user_id == user_id
+        )
+        if filters.state is not None:
+            statement = statement.where(MoneyRecurringTransaction.state == filters.state.value)
+        if filters.account_id is not None:
+            statement = statement.where(
+                exists().where(
+                    MoneyRecurringPosting.recurring_transaction_id == MoneyRecurringTransaction.id,
+                    MoneyRecurringPosting.account_id == filters.account_id,
+                )
+            )
+        if search is not None:
+            statement = statement.where(
+                or_(
+                    func.lower(MoneyRecurringTransaction.name).like(f"%{search}%"),
+                    func.lower(MoneyRecurringTransaction.memo).like(f"%{search}%"),
+                )
+            )
+        if filters.cursor:
+            updated_at, resource_id = _parse_updated_cursor(filters.cursor, fingerprint)
+            statement = statement.where(
+                (MoneyRecurringTransaction.updated_at < updated_at)
+                | (
+                    (MoneyRecurringTransaction.updated_at == updated_at)
+                    & (MoneyRecurringTransaction.id < resource_id)
+                )
+            )
+        statement = statement.order_by(
+            MoneyRecurringTransaction.updated_at.desc(),
+            MoneyRecurringTransaction.id.desc(),
+        ).limit(filters.limit + 1)
+        schedules = list((await db.execute(statement)).scalars().all())
+        next_cursor = None
+        if len(schedules) > filters.limit:
+            schedules.pop()
+            last = schedules[-1]
+            next_cursor = _encode_cursor(_cursor_payload(last.updated_at, last.id, fingerprint))
+        return RecurringTransactionPage(
+            [await _recurring_transaction_record(db, schedule) for schedule in schedules],
+            next_cursor,
+        )
+
+
+async def update_recurring_transaction(
+    storage: DatabaseStorage,
+    user_id: str,
+    recurring_transaction_id: str,
+    payload: RecurringTransactionUpdateRequest,
+) -> RecurringTransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+            if schedule.state == MoneyRecurrenceState.ENDED.value:
+                raise RecurringTransactionStateError()
+            values = payload.model_dump(exclude_unset=True)
+            if payload.recurrence is not None:
+                try:
+                    timezone_or_error(payload.recurrence.timezone)
+                except ValueError:
+                    raise InvalidRecurringTransactionError() from None
+                schedule.timezone = payload.recurrence.timezone
+                schedule.rule = _recurrence_rule_payload(payload)
+                schedule.until_date = payload.recurrence.until_date
+                schedule.occurrence_count = payload.recurrence.occurrence_count
+                await db.execute(
+                    delete(MoneyRecurringOccurrence).where(
+                        MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+                        MoneyRecurringOccurrence.status == RecurringOccurrenceState.SCHEDULED.value,
+                    )
+                )
+                last_posted = await db.scalar(
+                    select(MoneyRecurringOccurrence.due_date)
+                    .where(
+                        MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+                        MoneyRecurringOccurrence.status == RecurringOccurrenceState.POSTED.value,
+                    )
+                    .order_by(MoneyRecurringOccurrence.due_date.desc())
+                    .limit(1)
+                )
+                first = _first_recurring_candidate(schedule)
+                if last_posted is not None:
+                    first = next(
+                        iter_calendar_occurrences(
+                            schedule.start_date,
+                            *_recurrence_parts(schedule),
+                            schedule.until_date,
+                            schedule.occurrence_count,
+                            after_date=last_posted,
+                            limit=1,
+                        ),
+                        None,
+                    )
+                if first is None:
+                    schedule.next_occurrence_date = None
+                    schedule.next_occurrence_number = None
+                    schedule.state = MoneyRecurrenceState.ENDED.value
+                    schedule.ended_at = now
+                else:
+                    schedule.next_occurrence_date = first.occurrence_date
+                    schedule.next_occurrence_number = first.sequence_number
+                    await _create_recurring_occurrence(
+                        db, schedule, first.occurrence_date, first.sequence_number
+                    )
+            if "name" in values and payload.name is not None:
+                schedule.name = payload.name
+            if "payee_id" in values:
+                await _validate_payee(db, user_id, payload.payee_id)
+                schedule.payee_id = payload.payee_id
+            if "memo" in values:
+                schedule.memo = payload.memo
+            if payload.postings is not None:
+                await _validate_postings(db, user_id, payload.postings)
+                await db.execute(
+                    delete(MoneyRecurringPosting).where(
+                        MoneyRecurringPosting.recurring_transaction_id == schedule.id
+                    )
+                )
+                db.add_all(
+                    [
+                        MoneyRecurringPosting(
+                            id=str(uuid4()),
+                            user_id=user_id,
+                            recurring_transaction_id=schedule.id,
+                            account_id=posting.account_id,
+                            category_id=posting.category_id,
+                            currency_code=posting.currency_code,
+                            amount=posting.amount,
+                        )
+                        for posting in payload.postings
+                    ]
+                )
+            schedule.updated_at = now
+            await db.flush()
+            return await _recurring_transaction_record(db, schedule)
+
+
+async def pause_recurring_transaction(
+    storage: DatabaseStorage, user_id: str, recurring_transaction_id: str
+) -> RecurringTransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+            if schedule.state != MoneyRecurrenceState.ACTIVE.value:
+                raise RecurringTransactionStateError()
+            schedule.state = MoneyRecurrenceState.PAUSED.value
+            schedule.paused_at = now
+            schedule.updated_at = now
+            await db.flush()
+            return await _recurring_transaction_record(db, schedule)
+
+
+async def resume_recurring_transaction(
+    storage: DatabaseStorage, user_id: str, recurring_transaction_id: str
+) -> RecurringTransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+            if schedule.state != MoneyRecurrenceState.PAUSED.value:
+                raise RecurringTransactionStateError()
+            resume_date = local_date(now, schedule.timezone)
+            while (
+                schedule.next_occurrence_date is not None
+                and schedule.next_occurrence_date <= resume_date
+            ):
+                occurrence = await db.scalar(
+                    select(MoneyRecurringOccurrence).where(
+                        MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+                        MoneyRecurringOccurrence.due_date == schedule.next_occurrence_date,
+                    )
+                )
+                if occurrence is None:
+                    occurrence = await _create_recurring_occurrence(
+                        db,
+                        schedule,
+                        schedule.next_occurrence_date,
+                        schedule.next_occurrence_number or 1,
+                    )
+                if occurrence.status == RecurringOccurrenceState.SCHEDULED.value:
+                    occurrence.status = RecurringOccurrenceState.SKIPPED.value
+                _set_next_recurring_candidate(schedule, occurrence.due_date, now)
+            if schedule.state == MoneyRecurrenceState.ENDED.value:
+                schedule.updated_at = now
+            else:
+                schedule.state = MoneyRecurrenceState.ACTIVE.value
+                schedule.paused_at = None
+                schedule.updated_at = now
+            await db.flush()
+            return await _recurring_transaction_record(db, schedule)
+
+
+async def end_recurring_transaction(
+    storage: DatabaseStorage, user_id: str, recurring_transaction_id: str
+) -> RecurringTransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+            if schedule.state == MoneyRecurrenceState.ENDED.value:
+                raise RecurringTransactionStateError()
+            scheduled = list(
+                (
+                    await db.execute(
+                        select(MoneyRecurringOccurrence).where(
+                            MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+                            MoneyRecurringOccurrence.status
+                            == RecurringOccurrenceState.SCHEDULED.value,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for occurrence in scheduled:
+                occurrence.status = RecurringOccurrenceState.SKIPPED.value
+            schedule.state = MoneyRecurrenceState.ENDED.value
+            schedule.next_occurrence_date = None
+            schedule.next_occurrence_number = None
+            schedule.ended_at = now
+            schedule.updated_at = now
+            await db.flush()
+            return await _recurring_transaction_record(db, schedule)
+
+
+async def _process_one_recurring_occurrence(
+    storage: DatabaseStorage,
+    user_id: str,
+    recurring_transaction_id: str,
+    now: datetime,
+) -> bool:
+    async with storage.session() as db:
+        async with db.begin():
+            schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
+            if (
+                schedule.state != MoneyRecurrenceState.ACTIVE.value
+                or schedule.next_occurrence_date is None
+            ):
+                return False
+            due_date = schedule.next_occurrence_date
+            occurrence = await db.scalar(
+                select(MoneyRecurringOccurrence).where(
+                    MoneyRecurringOccurrence.recurring_transaction_id == schedule.id,
+                    MoneyRecurringOccurrence.due_date == due_date,
+                )
+            )
+            if occurrence is None:
+                occurrence = await _create_recurring_occurrence(
+                    db, schedule, due_date, schedule.next_occurrence_number or 1
+                )
+            if occurrence.status != RecurringOccurrenceState.SCHEDULED.value:
+                _set_next_recurring_candidate(schedule, due_date, now)
+                await db.flush()
+                return False
+            postings = await _recurring_posting_requests(db, schedule.id)
+            transaction_payload = TransactionCreateRequest(
+                transaction_date=due_date,
+                name=schedule.name,
+                payee_id=schedule.payee_id,
+                memo=schedule.memo,
+                postings=postings,
+            )
+            transaction, _ = await _create_transaction_in_session(
+                db, user_id, transaction_payload, now
+            )
+            occurrence.status = RecurringOccurrenceState.POSTED.value
+            occurrence.transaction_id = transaction.id
+            occurrence.processed_at = now
+            _set_next_recurring_candidate(schedule, due_date, now)
+            await _ensure_next_recurring_occurrence(db, schedule)
+            schedule.updated_at = now
+            await db.flush()
+            return True
+
+
+async def process_due_recurring_transactions(
+    storage: DatabaseStorage,
+    user_id: str | None = None,
+    now: datetime | None = None,
+) -> RecurringProcessResult:
+    current = now or _utc_now()
+    processed = 0
+    failed = 0
+    async with storage.session() as db:
+        statement = select(MoneyRecurringTransaction).where(
+            MoneyRecurringTransaction.state == MoneyRecurrenceState.ACTIVE.value,
+            MoneyRecurringTransaction.next_occurrence_date.is_not(None),
+        )
+        if user_id is not None:
+            statement = statement.where(MoneyRecurringTransaction.user_id == user_id)
+        schedules = list((await db.execute(statement)).scalars().all())
+        schedule_ids = [(schedule.user_id, schedule.id) for schedule in schedules]
+
+    for schedule_user_id, schedule_id in schedule_ids:
+        while True:
+            async with storage.session() as db:
+                schedule = await _get_recurring_transaction(db, schedule_user_id, schedule_id)
+                if (
+                    schedule.state != MoneyRecurrenceState.ACTIVE.value
+                    or schedule.next_occurrence_date is None
+                    or schedule.next_occurrence_date > local_date(current, schedule.timezone)
+                ):
+                    break
+            try:
+                if await _process_one_recurring_occurrence(
+                    storage, schedule_user_id, schedule_id, current
+                ):
+                    processed += 1
+            except Exception:
+                failed += 1
+                break
+    return RecurringProcessResult(processed_count=processed, failed_count=failed)
 
 
 async def get_transaction(

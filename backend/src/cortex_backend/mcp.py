@@ -71,6 +71,8 @@ from .money.schemas import (
     InstallmentPlanResponse,
     InstallmentPlanState,
     InstallmentProcessResponse,
+    MoneyRecurrenceRequest,
+    MoneyRecurrenceState,
     MoneySummaryResponse,
     PayeeCreateRequest,
     PayeeListResponse,
@@ -78,6 +80,13 @@ from .money.schemas import (
     PayeeUpdateRequest,
     PostingResponse,
     ReconciliationState,
+    RecurringOccurrenceResponse,
+    RecurringPostingResponse,
+    RecurringProcessResponse,
+    RecurringTransactionCreateRequest,
+    RecurringTransactionListResponse,
+    RecurringTransactionResponse,
+    RecurringTransactionUpdateRequest,
     TransactionCreateRequest,
     TransactionListResponse,
     TransactionResponse,
@@ -97,6 +106,8 @@ from .money.service import (
     MoneySummaryRecord,
     PayeeListFilters,
     PayeeRecord,
+    RecurringTransactionListFilters,
+    RecurringTransactionRecord,
     TransactionListFilters,
     TransactionRecord,
     archive_account,
@@ -108,30 +119,38 @@ from .money.service import (
     create_category,
     create_installment_plan,
     create_payee,
+    create_recurring_transaction,
     create_transaction,
     delete_budget,
+    end_recurring_transaction,
     get_account,
     get_budget,
     get_category,
     get_installment_plan,
     get_money_summary,
     get_payee,
+    get_recurring_transaction,
     get_transaction,
     list_accounts,
     list_budgets,
     list_categories,
     list_installment_plans,
     list_payees,
+    list_recurring_transactions,
     list_transactions,
+    pause_recurring_transaction,
     process_due_installments,
+    process_due_recurring_transactions,
     reconcile_posting,
     restore_account,
     restore_category,
     restore_payee,
+    resume_recurring_transaction,
     reverse_transaction,
     update_account,
     update_category,
     update_payee,
+    update_recurring_transaction,
     update_transaction,
     upsert_budget,
 )
@@ -465,6 +484,58 @@ def _money_installment_plan_response(record: InstallmentPlanRecord) -> Installme
         ],
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _money_recurring_transaction_response(
+    record: RecurringTransactionRecord,
+) -> RecurringTransactionResponse:
+    return RecurringTransactionResponse(
+        id=record.id,
+        start_date=record.start_date,
+        name=record.name,
+        payee_id=record.payee_id,
+        memo=record.memo,
+        recurrence=MoneyRecurrenceRequest(
+            timezone=record.timezone,
+            frequency=record.frequency,
+            interval=record.interval,
+            weekdays=record.weekdays,
+            month_day=record.month_day,
+            month=record.month,
+            day=record.day,
+            until_date=record.until_date,
+            occurrence_count=record.occurrence_count,
+        ),
+        state=record.state,
+        next_occurrence_date=record.next_occurrence_date,
+        next_occurrence_number=record.next_occurrence_number,
+        posted_count=record.posted_count,
+        postings=[
+            RecurringPostingResponse(
+                id=posting.id,
+                account_id=posting.account_id,
+                category_id=posting.category_id,
+                currency_code=posting.currency_code,
+                amount=posting.amount,
+            )
+            for posting in record.postings
+        ],
+        occurrences=[
+            RecurringOccurrenceResponse(
+                id=occurrence.id,
+                sequence_number=occurrence.sequence_number,
+                due_date=occurrence.due_date,
+                status=occurrence.status,
+                transaction_id=occurrence.transaction_id,
+                processed_at=occurrence.processed_at,
+            )
+            for occurrence in record.occurrences
+        ],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        paused_at=record.paused_at,
+        ended_at=record.ended_at,
     )
 
 
@@ -1211,6 +1282,150 @@ def create_mcp_server(
         except MoneyError as exc:
             _raise_money_tool(exc)
         return InstallmentProcessResponse(processed_count=processed_count)
+
+    @server.tool(name="create_money_recurring_transaction")
+    async def create_money_recurring_transaction_tool(
+        payload: RecurringTransactionCreateRequest, ctx: Context | None = None
+    ) -> RecurringTransactionResponse:
+        """Create an owner-scoped recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await create_recurring_transaction(
+                database_storage(storage), get_mcp_auth().user.id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="list_money_recurring_transactions")
+    async def list_money_recurring_transactions_tool(
+        state: str | None = None,
+        account_id: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+        ctx: Context | None = None,
+    ) -> RecurringTransactionListResponse:
+        """List owner-scoped recurring transaction schedules."""
+
+        del ctx
+        try:
+            parsed_state = MoneyRecurrenceState(state) if state is not None else None
+            page = await list_recurring_transactions(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                RecurringTransactionListFilters(
+                    state=parsed_state,
+                    account_id=account_id,
+                    search=search,
+                    limit=limit,
+                    cursor=cursor,
+                ),
+            )
+        except (MoneyError, ValueError) as exc:
+            if isinstance(exc, MoneyError):
+                _raise_money_tool(exc)
+            raise ToolError("money_invalid_query: The money list query is invalid.") from exc
+        return RecurringTransactionListResponse(
+            items=[_money_recurring_transaction_response(item) for item in page.items],
+            next_cursor=page.next_cursor,
+        )
+
+    @server.tool(name="get_money_recurring_transaction")
+    async def get_money_recurring_transaction_tool(
+        recurring_transaction_id: str, ctx: Context | None = None
+    ) -> RecurringTransactionResponse:
+        """Return one owner-scoped recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await get_recurring_transaction(
+                database_storage(storage), get_mcp_auth().user.id, recurring_transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="update_money_recurring_transaction")
+    async def update_money_recurring_transaction_tool(
+        recurring_transaction_id: str,
+        payload: RecurringTransactionUpdateRequest,
+        ctx: Context | None = None,
+    ) -> RecurringTransactionResponse:
+        """Update future occurrences of one recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await update_recurring_transaction(
+                database_storage(storage),
+                get_mcp_auth().user.id,
+                recurring_transaction_id,
+                payload,
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="pause_money_recurring_transaction")
+    async def pause_money_recurring_transaction_tool(
+        recurring_transaction_id: str, ctx: Context | None = None
+    ) -> RecurringTransactionResponse:
+        """Pause future occurrences of one recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await pause_recurring_transaction(
+                database_storage(storage), get_mcp_auth().user.id, recurring_transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="resume_money_recurring_transaction")
+    async def resume_money_recurring_transaction_tool(
+        recurring_transaction_id: str, ctx: Context | None = None
+    ) -> RecurringTransactionResponse:
+        """Resume one paused recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await resume_recurring_transaction(
+                database_storage(storage), get_mcp_auth().user.id, recurring_transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="end_money_recurring_transaction")
+    async def end_money_recurring_transaction_tool(
+        recurring_transaction_id: str, ctx: Context | None = None
+    ) -> RecurringTransactionResponse:
+        """End future occurrences of one recurring transaction schedule."""
+
+        del ctx
+        try:
+            record = await end_recurring_transaction(
+                database_storage(storage), get_mcp_auth().user.id, recurring_transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_recurring_transaction_response(record)
+
+    @server.tool(name="process_due_money_recurring_transactions")
+    async def process_due_money_recurring_transactions_tool(
+        ctx: Context | None = None,
+    ) -> RecurringProcessResponse:
+        """Catch up due recurring transaction occurrences for the authenticated owner."""
+
+        del ctx
+        result = await process_due_recurring_transactions(
+            database_storage(storage), get_mcp_auth().user.id
+        )
+        return RecurringProcessResponse(
+            processed_count=result.processed_count,
+            failed_count=result.failed_count,
+        )
 
     @server.tool(name="create_money_transaction")
     async def create_money_transaction_tool(

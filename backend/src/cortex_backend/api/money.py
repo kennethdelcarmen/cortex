@@ -25,6 +25,8 @@ from ..money.schemas import (
     InstallmentPlanListResponse,
     InstallmentPlanResponse,
     InstallmentProcessResponse,
+    MoneyRecurrenceRequest,
+    MoneyRecurrenceState,
     MoneySummaryResponse,
     PayeeCreateRequest,
     PayeeListResponse,
@@ -32,6 +34,13 @@ from ..money.schemas import (
     PayeeUpdateRequest,
     PostingResponse,
     ReconciliationState,
+    RecurringOccurrenceResponse,
+    RecurringPostingResponse,
+    RecurringProcessResponse,
+    RecurringTransactionCreateRequest,
+    RecurringTransactionListResponse,
+    RecurringTransactionResponse,
+    RecurringTransactionUpdateRequest,
     TransactionCreateRequest,
     TransactionListResponse,
     TransactionResponse,
@@ -51,6 +60,8 @@ from ..money.service import (
     MoneySummaryRecord,
     PayeeListFilters,
     PayeeRecord,
+    RecurringTransactionListFilters,
+    RecurringTransactionRecord,
     TransactionListFilters,
     TransactionRecord,
     archive_account,
@@ -62,30 +73,38 @@ from ..money.service import (
     create_category,
     create_installment_plan,
     create_payee,
+    create_recurring_transaction,
     create_transaction,
     delete_budget,
+    end_recurring_transaction,
     get_account,
     get_budget,
     get_category,
     get_installment_plan,
     get_money_summary,
     get_payee,
+    get_recurring_transaction,
     get_transaction,
     list_accounts,
     list_budgets,
     list_categories,
     list_installment_plans,
     list_payees,
+    list_recurring_transactions,
     list_transactions,
+    pause_recurring_transaction,
     process_due_installments,
+    process_due_recurring_transactions,
     reconcile_posting,
     restore_account,
     restore_category,
     restore_payee,
+    resume_recurring_transaction,
     reverse_transaction,
     update_account,
     update_category,
     update_payee,
+    update_recurring_transaction,
     update_transaction,
     upsert_budget,
 )
@@ -232,6 +251,58 @@ def _installment_plan_response(record: InstallmentPlanRecord) -> InstallmentPlan
         ],
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _recurring_transaction_response(
+    record: RecurringTransactionRecord,
+) -> RecurringTransactionResponse:
+    return RecurringTransactionResponse(
+        id=record.id,
+        start_date=record.start_date,
+        name=record.name,
+        payee_id=record.payee_id,
+        memo=record.memo,
+        recurrence=MoneyRecurrenceRequest(
+            timezone=record.timezone,
+            frequency=record.frequency,
+            interval=record.interval,
+            weekdays=record.weekdays,
+            month_day=record.month_day,
+            month=record.month,
+            day=record.day,
+            until_date=record.until_date,
+            occurrence_count=record.occurrence_count,
+        ),
+        state=record.state,
+        next_occurrence_date=record.next_occurrence_date,
+        next_occurrence_number=record.next_occurrence_number,
+        posted_count=record.posted_count,
+        postings=[
+            RecurringPostingResponse(
+                id=posting.id,
+                account_id=posting.account_id,
+                category_id=posting.category_id,
+                currency_code=posting.currency_code,
+                amount=posting.amount,
+            )
+            for posting in record.postings
+        ],
+        occurrences=[
+            RecurringOccurrenceResponse(
+                id=occurrence.id,
+                sequence_number=occurrence.sequence_number,
+                due_date=occurrence.due_date,
+                status=occurrence.status,
+                transaction_id=occurrence.transaction_id,
+                processed_at=occurrence.processed_at,
+            )
+            for occurrence in record.occurrences
+        ],
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        paused_at=record.paused_at,
+        ended_at=record.ended_at,
     )
 
 
@@ -691,6 +762,160 @@ async def cancel_installment_plan_route(
     try:
         return _installment_plan_response(
             await cancel_installment_plan(storage, auth.user.id, plan_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/recurring-transactions",
+    response_model=RecurringTransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_recurring_transaction_route(
+    payload: RecurringTransactionCreateRequest,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await create_recurring_transaction(storage, auth.user.id, payload)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.get("/recurring-transactions", response_model=RecurringTransactionListResponse)
+async def list_recurring_transactions_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+    state_filter: str | None = Query(default=None, alias="state"),
+    account_id: str | None = None,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    cursor: str | None = None,
+) -> RecurringTransactionListResponse:
+    try:
+        parsed_state = MoneyRecurrenceState(state_filter) if state_filter else None
+        page = await list_recurring_transactions(
+            storage,
+            auth.user.id,
+            RecurringTransactionListFilters(
+                state=parsed_state,
+                account_id=account_id,
+                search=search,
+                limit=limit,
+                cursor=cursor,
+            ),
+        )
+    except (MoneyError, ValueError) as exc:
+        if isinstance(exc, MoneyError):
+            _raise_http(exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "money_invalid_query", "message": "The money list query is invalid."},
+        ) from exc
+    return RecurringTransactionListResponse(
+        items=[_recurring_transaction_response(item) for item in page.items],
+        next_cursor=page.next_cursor,
+    )
+
+
+@router.post("/recurring-transactions/process-due", response_model=RecurringProcessResponse)
+async def process_due_recurring_transactions_route(
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringProcessResponse:
+    result = await process_due_recurring_transactions(storage, auth.user.id)
+    return RecurringProcessResponse(
+        processed_count=result.processed_count,
+        failed_count=result.failed_count,
+    )
+
+
+@router.get(
+    "/recurring-transactions/{recurring_transaction_id}",
+    response_model=RecurringTransactionResponse,
+)
+async def get_recurring_transaction_route(
+    recurring_transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(get_current_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await get_recurring_transaction(storage, auth.user.id, recurring_transaction_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.patch(
+    "/recurring-transactions/{recurring_transaction_id}",
+    response_model=RecurringTransactionResponse,
+)
+async def update_recurring_transaction_route(
+    recurring_transaction_id: str,
+    payload: RecurringTransactionUpdateRequest,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await update_recurring_transaction(
+                storage, auth.user.id, recurring_transaction_id, payload
+            )
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/recurring-transactions/{recurring_transaction_id}/pause",
+    response_model=RecurringTransactionResponse,
+)
+async def pause_recurring_transaction_route(
+    recurring_transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await pause_recurring_transaction(storage, auth.user.id, recurring_transaction_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/recurring-transactions/{recurring_transaction_id}/resume",
+    response_model=RecurringTransactionResponse,
+)
+async def resume_recurring_transaction_route(
+    recurring_transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await resume_recurring_transaction(storage, auth.user.id, recurring_transaction_id)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/recurring-transactions/{recurring_transaction_id}/end",
+    response_model=RecurringTransactionResponse,
+)
+async def end_recurring_transaction_route(
+    recurring_transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> RecurringTransactionResponse:
+    try:
+        return _recurring_transaction_response(
+            await end_recurring_transaction(storage, auth.user.id, recurring_transaction_id)
         )
     except MoneyError as exc:
         _raise_http(exc)

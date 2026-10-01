@@ -219,6 +219,43 @@ be cancelled without reversing historical charges. Configure the worker with
 `CORTEX_INSTALLMENT_CHARGING_POLL_SECONDS`. Matching authenticated MCP tools use
 the same service functions as REST.
 
+Migration `0021_money_recurring_transactions` adds fixed posting templates for
+weekly, monthly, and yearly recurring transactions. Rules use an IANA timezone,
+support intervals, weekly weekdays, monthly day clamping, yearly month/day,
+and either an end date or an occurrence count. The `start_date` is the first
+occurrence. Posting templates must balance to zero per currency, so transfers
+and multi-posting splits are supported.
+
+Recurring REST routes are under `/api/v1/money/recurring-transactions`:
+
+- `POST` creates a schedule; `GET` lists schedules with `state`, `account_id`,
+  `search`, `limit`, and cursor filters; `GET /{id}` returns a schedule with
+  its normalized postings and occurrence history.
+- `PATCH /{id}` replaces the future template/rule only. Already-posted ledger
+  transactions are never changed. `POST /{id}/pause`, `/resume`, and `/end`
+  control the lifecycle. Pause suppresses due dates while paused; resume skips
+  missed dates and continues at the next future date; end permanently cancels
+  future scheduled occurrences.
+- `POST /process-due` posts every due occurrence individually, including all
+  missed occurrences after downtime. Each occurrence is processed in its own
+  transaction and remains scheduled if an account, category, or payee is
+  archived or otherwise invalid, allowing a later retry after restoration.
+
+The same operations are exposed through the MCP tools
+`create_money_recurring_transaction`, `list_money_recurring_transactions`,
+`get_money_recurring_transaction`, `update_money_recurring_transaction`,
+`pause_money_recurring_transaction`, `resume_money_recurring_transaction`,
+`end_money_recurring_transaction`, and
+`process_due_money_recurring_transactions`. The existing disabled frontend
+Recurring tab is unchanged in this backend-only release.
+
+Recurring posting runs in an independent restart-safe worker. It is enabled by
+default and polls every 60 seconds; configure
+`CORTEX_RECURRING_TRANSACTION_POSTING_ENABLED` and
+`CORTEX_RECURRING_TRANSACTION_POSTING_POLL_SECONDS` independently of the
+installment worker settings. Apply `uv run alembic upgrade head` before
+starting a service against an existing database.
+
 ## Internal retrieval contract and hybrid retrieval
 
 `cortex_backend.chunking.service.search_chunks` is the current internal

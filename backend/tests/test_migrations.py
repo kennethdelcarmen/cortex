@@ -260,6 +260,9 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "money_postings",
             "money_installment_plans",
             "money_installment_occurrences",
+            "money_recurring_transactions",
+            "money_recurring_postings",
+            "money_recurring_occurrences",
         }
         assert money_tables <= tables
         assert {
@@ -360,6 +363,48 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
         } == {
             row[1] for row in connection.execute("PRAGMA table_info(money_installment_occurrences)")
         }
+        assert {
+            "id",
+            "user_id",
+            "start_date",
+            "name",
+            "payee_id",
+            "memo",
+            "timezone",
+            "rule",
+            "until_date",
+            "occurrence_count",
+            "state",
+            "next_occurrence_date",
+            "next_occurrence_number",
+            "created_at",
+            "updated_at",
+            "paused_at",
+            "ended_at",
+        } == {
+            row[1] for row in connection.execute("PRAGMA table_info(money_recurring_transactions)")
+        }
+        assert {
+            "id",
+            "user_id",
+            "recurring_transaction_id",
+            "account_id",
+            "category_id",
+            "currency_code",
+            "amount",
+        } == {row[1] for row in connection.execute("PRAGMA table_info(money_recurring_postings)")}
+        assert {
+            "id",
+            "user_id",
+            "recurring_transaction_id",
+            "sequence_number",
+            "due_date",
+            "status",
+            "transaction_id",
+            "processed_at",
+        } == {
+            row[1] for row in connection.execute("PRAGMA table_info(money_recurring_occurrences)")
+        }
 
         indexes = {
             row[1]
@@ -417,6 +462,11 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "ix_money_installment_plans_owner_purchase_date",
             "ix_money_installment_occurrences_owner_due_status",
             "ix_money_installment_occurrences_plan_status",
+            "ix_money_recurring_transactions_owner_state_updated",
+            "ix_money_recurring_transactions_owner_next_state",
+            "ix_money_recurring_postings_owner_schedule",
+            "ix_money_recurring_occurrences_owner_due_status",
+            "ix_money_recurring_occurrences_schedule_status",
         } <= indexes
 
         for table, parent_table in (
@@ -445,6 +495,43 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
     upgrade_database(database_path, monkeypatch)
 
     with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0021_money_recurring_transactions",
+        )
+
+
+def test_recurring_money_migration_downgrades_cleanly(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch)
+    backend_path = Path(__file__).parents[1]
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            str(backend_path / "alembic.ini"),
+            "downgrade",
+            "0020_credit_card_installments",
+        ],
+        cwd=backend_path,
+        env=os.environ.copy(),
+        check=True,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert (
+            not {
+                "money_recurring_transactions",
+                "money_recurring_postings",
+                "money_recurring_occurrences",
+            }
+            & tables
+        )
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
             "0020_credit_card_installments",
         )

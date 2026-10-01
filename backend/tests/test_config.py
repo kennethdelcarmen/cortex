@@ -35,6 +35,8 @@ def test_settings_default_to_local_sqlite_path(monkeypatch) -> None:
     assert settings.file_max_size_bytes == 25 * 1024 * 1024
     assert settings.embeddings_enabled is False
     assert settings.embedding_batch_size == 16
+    assert settings.recurring_transaction_posting_enabled is True
+    assert settings.recurring_transaction_posting_poll_seconds == 60.0
 
 
 def test_production_settings_require_setup_secret() -> None:

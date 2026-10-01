@@ -27,7 +27,10 @@ from .embeddings.service import EmbeddingHealth, run_embedding_loop
 from .files.processing import FileProcessingHealth, run_file_processing_loop
 from .files.storage import FileBlobStore, LocalFileBlobStore
 from .mcp import create_mcp_server
-from .money.processing import run_installment_charging_loop
+from .money.processing import (
+    run_installment_charging_loop,
+    run_recurring_transaction_posting_loop,
+)
 from .storage import ClosableStorage, DatabaseStorage, SQLiteStorage, Storage
 
 
@@ -38,6 +41,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     processing_task: asyncio.Task[None] | None = None
     embedding_task: asyncio.Task[None] | None = None
     installment_task: asyncio.Task[None] | None = None
+    recurring_transaction_task: asyncio.Task[None] | None = None
     async with application.state.mcp_app.lifespan(application):
         try:
             if (
@@ -78,6 +82,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     )
                 )
                 application.state.installment_charging_task = installment_task
+            if application.state.settings.recurring_transaction_posting_enabled and isinstance(
+                application.state.storage, DatabaseStorage
+            ):
+                recurring_transaction_task = asyncio.create_task(
+                    run_recurring_transaction_posting_loop(
+                        application.state.storage,
+                        application.state.settings,
+                    )
+                )
+                application.state.recurring_transaction_task = recurring_transaction_task
             yield
         finally:
             if processing_task is not None:
@@ -95,6 +109,11 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 with suppress(asyncio.CancelledError):
                     await installment_task
             application.state.installment_charging_task = None
+            if recurring_transaction_task is not None:
+                recurring_transaction_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await recurring_transaction_task
+            application.state.recurring_transaction_task = None
             storage = application.state.storage
             if isinstance(storage, ClosableStorage):
                 await storage.close()
@@ -165,6 +184,7 @@ def create_app(
     )
     application.state.embedding_task = None
     application.state.installment_charging_task = None
+    application.state.recurring_transaction_task = None
 
     application.add_middleware(
         CORSMiddleware,

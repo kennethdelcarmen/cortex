@@ -17,6 +17,8 @@ from cortex_backend.files.processing import (
     processing_warnings,
     run_file_processing_loop,
 )
+from cortex_backend.money.processing import run_recurring_transaction_posting_loop
+from cortex_backend.money.service import RecurringProcessResult
 
 
 async def test_worker_retries_after_transient_poll_failure(monkeypatch) -> None:
@@ -46,6 +48,32 @@ async def test_worker_retries_after_transient_poll_failure(monkeypatch) -> None:
             await task
 
     assert health.state == "stopped"
+
+
+async def test_recurring_worker_retries_after_transient_poll_failure(monkeypatch) -> None:
+    settings = Settings(recurring_transaction_posting_poll_seconds=0.001)
+    recovered = asyncio.Event()
+    calls = 0
+
+    async def flaky_poll(*args, **kwargs) -> RecurringProcessResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary database failure")
+        recovered.set()
+        return RecurringProcessResult(processed_count=0, failed_count=0)
+
+    monkeypatch.setattr(
+        "cortex_backend.money.processing.process_due_recurring_transactions", flaky_poll
+    )
+    task = asyncio.create_task(run_recurring_transaction_posting_loop(None, settings))
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+        assert calls >= 2
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 def test_missing_processing_tools_are_reported_as_capability_warnings() -> None:

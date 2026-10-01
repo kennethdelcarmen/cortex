@@ -162,3 +162,20 @@ class InstallmentPlanLockedError(MoneyError):
     status_code = 409
     code = "money_installment_plan_locked"
     message = "The installment plan cannot be changed after a charge has posted."
+
+
+class RecurringTransactionNotFoundError(MoneyNotFoundError):
+    code = "money_recurring_transaction_not_found"
+    message = "The recurring transaction was not found."
+
+
+class InvalidRecurringTransactionError(MoneyError):
+    status_code = 422
+    code = "money_invalid_recurring_transaction"
+    message = "The recurring transaction is invalid for the selected accounts, categories, or rule."
+
+
+class RecurringTransactionStateError(MoneyError):
+    status_code = 409
+    code = "money_recurring_transaction_state"
+    message = "The recurring transaction cannot perform that lifecycle operation."

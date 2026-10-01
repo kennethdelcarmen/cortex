@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Date,
     DateTime,
@@ -243,6 +244,131 @@ class MoneyInstallmentOccurrence(Base):
         String(36), ForeignKey("money_transactions.id", ondelete="SET NULL"), nullable=True
     )
     charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MoneyRecurringTransaction(Base):
+    """An owner-scoped recurring transaction template and calendar rule."""
+
+    __tablename__ = "money_recurring_transactions"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('active', 'paused', 'ended')",
+            name="ck_money_recurring_transactions_state",
+        ),
+        Index(
+            "ix_money_recurring_transactions_owner_state_updated",
+            "user_id",
+            "state",
+            "updated_at",
+        ),
+        Index(
+            "ix_money_recurring_transactions_owner_next_state",
+            "user_id",
+            "state",
+            "next_occurrence_date",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    payee_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_payees.id", ondelete="RESTRICT"), nullable=True
+    )
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    until_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    occurrence_count: Mapped[int | None] = mapped_column(nullable=True)
+    state: Mapped[str] = mapped_column(String(8), nullable=False, default="active")
+    next_occurrence_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    next_occurrence_number: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MoneyRecurringPosting(Base):
+    """One fixed posting in a recurring transaction template."""
+
+    __tablename__ = "money_recurring_postings"
+    __table_args__ = (
+        CheckConstraint(
+            "(account_id IS NOT NULL AND category_id IS NULL) OR "
+            "(account_id IS NULL AND category_id IS NOT NULL)",
+            name="ck_money_recurring_postings_target",
+        ),
+        CheckConstraint("amount <> '0'", name="ck_money_recurring_postings_nonzero"),
+        CheckConstraint("length(currency_code) = 3", name="ck_money_recurring_postings_currency"),
+        Index("ix_money_recurring_postings_owner_schedule", "user_id", "recurring_transaction_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    recurring_transaction_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("money_recurring_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    account_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_accounts.id", ondelete="RESTRICT"), nullable=True
+    )
+    category_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_categories.id", ondelete="RESTRICT"), nullable=True
+    )
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    amount: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class MoneyRecurringOccurrence(Base):
+    """One scheduled, posted, or skipped recurring transaction occurrence."""
+
+    __tablename__ = "money_recurring_occurrences"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('scheduled', 'posted', 'skipped')",
+            name="ck_money_recurring_occurrences_status",
+        ),
+        UniqueConstraint(
+            "recurring_transaction_id",
+            "due_date",
+            name="uq_money_recurring_occurrences_schedule_date",
+        ),
+        Index(
+            "ix_money_recurring_occurrences_owner_due_status",
+            "user_id",
+            "due_date",
+            "status",
+        ),
+        Index(
+            "ix_money_recurring_occurrences_schedule_status",
+            "recurring_transaction_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    recurring_transaction_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("money_recurring_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence_number: Mapped[int] = mapped_column(nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(9), nullable=False, default="scheduled")
+    transaction_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("money_transactions.id", ondelete="SET NULL"), nullable=True
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MoneyPosting(Base):

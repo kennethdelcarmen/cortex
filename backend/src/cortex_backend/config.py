@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     embedding_max_attempts: int = Field(default=3, ge=1, le=10)
     installment_charging_enabled: bool = True
     installment_charging_poll_seconds: float = Field(default=60.0, gt=0)
+    recurring_transaction_posting_enabled: bool = True
+    recurring_transaction_posting_poll_seconds: float = Field(default=60.0, gt=0)
     setup_secret: SecretStr | None = None
     cors_origins: list[str] = Field(default_factory=list)
 
