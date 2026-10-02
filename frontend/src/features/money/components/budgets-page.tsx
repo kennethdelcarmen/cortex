@@ -668,12 +668,12 @@ function BudgetWorkspace({ email }: { email: string }) {
               <p className="font-mono text-[0.66rem] uppercase tracking-[0.18em] text-muted-foreground">Monthly snapshot</p>
               <h2 id="budget-summary-title" className="mt-2 text-xl font-medium tracking-[-0.025em] sm:text-2xl">A clearer number to live with.</h2>
             </div>
-            <div className="flex flex-wrap items-end gap-3">
-              <label htmlFor="budget-period" className="flex flex-col gap-2 font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_6rem] items-end gap-3 sm:w-auto sm:grid-cols-[11rem_6rem]">
+              <label htmlFor="budget-period" className="flex min-w-0 flex-col gap-2 font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground">
                 View month
                 <div className="relative">
                   <CalendarDays aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-primary-strong" />
-                  <Input id="budget-period" type="month" className="h-10 w-44 bg-background pl-9 font-sans text-sm normal-case tracking-normal" value={period} onChange={(event) => setPeriod(event.target.value || currentPeriod())} />
+                  <Input id="budget-period" type="month" className="h-10 w-full bg-background pl-9 font-sans text-sm normal-case tracking-normal" value={period} onChange={(event) => setPeriod(event.target.value || currentPeriod())} />
                 </div>
               </label>
               <MoneySelectField
@@ -683,7 +683,8 @@ function BudgetWorkspace({ email }: { email: string }) {
                 selectedLabel={currencyCode}
                 onValueChange={setCurrencyCode}
                 size="compact"
-                triggerClassName="w-24"
+                className="w-24"
+                triggerClassName="w-full"
               >
                 {currencyOptions.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
               </MoneySelectField>

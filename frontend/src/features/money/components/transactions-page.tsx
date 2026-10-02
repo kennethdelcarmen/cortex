@@ -2,17 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeftRight,
-  Building2,
   ChevronDown,
   CreditCard,
   ReceiptText,
   Repeat2,
   Search,
   SlidersHorizontal,
-  Tag,
-  Tags,
-  WalletCards,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -48,6 +43,7 @@ import {
 } from "../api";
 import { invalidateMoneyQueries, useMoneyCatalog, useMoneyInstallmentPlans, useMoneyTransactions } from "../hooks";
 import { MoneyFloatingAction } from "./money-floating-action";
+import { moneyAccountContextIcon, MoneyContextLine, moneyCategoryContextIcon, type MoneyContextKind } from "./money-context-line";
 import { MoneySelectField } from "./money-select-field";
 import { RecurringTransactionsSection } from "./recurring-transactions-section";
 import { TransactionDrawer } from "./transaction-drawer";
@@ -89,15 +85,6 @@ type ActiveFilter = {
   onRemove: () => void;
 };
 
-function TransactionContextLine({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <Icon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" />
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
 function TransactionRow({
   transaction,
   accounts,
@@ -126,18 +113,13 @@ function TransactionRow({
     return postingAccount?.account_type === "credit_card";
   });
   const isInstallmentCharge = transaction.name.includes(" · Installment ");
-  const categoryIcon = isInstallmentCharge
-    ? ReceiptText
+  const contextKind: MoneyContextKind = isInstallmentCharge
+    ? "installment"
     : split
-      ? Tags
+      ? "split"
       : mode === "transfer"
-        ? ArrowLeftRight
-        : Tag;
-  const accountIcon = account?.account_type === "credit_card"
-    ? CreditCard
-    : account?.account_type === "cash"
-      ? WalletCards
-      : Building2;
+        ? "transfer"
+        : "category";
   const currencyCode = accountPostings[0]?.currency_code ?? "PHP";
   const reconciliation = accountPostings.length === 0
     ? "—"
@@ -183,9 +165,9 @@ function TransactionRow({
           <span className="mt-1 block truncate text-xs text-muted-foreground">{supportingText || "No additional context"}</span>
         </span>
         <span className="min-w-0 text-xs text-muted-foreground">
-          <TransactionContextLine icon={categoryIcon} label={contextLabel} />
+          <MoneyContextLine icon={moneyCategoryContextIcon(contextKind)} label={contextLabel} />
           <span className="mt-1 block">
-            <TransactionContextLine icon={accountIcon} label={accountDisplayLabel} />
+            <MoneyContextLine icon={moneyAccountContextIcon(account)} label={accountDisplayLabel} />
           </span>
         </span>
         <span className="font-mono text-[0.65rem] uppercase tracking-[0.08em] text-muted-foreground">{reconciliation}</span>

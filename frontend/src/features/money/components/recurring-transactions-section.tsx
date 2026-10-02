@@ -45,6 +45,7 @@ import {
 } from "../api";
 import { invalidateMoneyQueries, useMoneyRecurringTransactions } from "../hooks";
 import { accountLabel, describeMoneyError, formatSignedMoney } from "../utils";
+import { moneyAccountContextIcon, MoneyContextLine, moneyCategoryContextIcon, type MoneyContextKind } from "./money-context-line";
 import { MoneySelectField } from "./money-select-field";
 import { RecurringTransactionDrawer } from "./recurring-transaction-drawer";
 
@@ -97,11 +98,21 @@ function statusLabel(state: MoneyRecurrenceState) {
   return state[0].toUpperCase() + state.slice(1);
 }
 
-function templateSummary(
+type RecurringContextSummary = {
+  contextKind: MoneyContextKind;
+  contextLabel: string;
+  account?: MoneyAccount;
+  accountText: string;
+  amount: string | null;
+  currency: string;
+  guided: boolean;
+};
+
+function recurringContextSummary(
   schedule: MoneyRecurringTransaction,
   accounts: MoneyAccount[],
   categories: MoneyCategory[],
-) {
+): RecurringContextSummary {
   const accountPostings = schedule.postings.filter((posting) => posting.account_id);
   const categoryPostings = schedule.postings.filter((posting) => posting.category_id);
   const accountById = new Map(accounts.map((account) => [account.id, account]));
@@ -110,9 +121,13 @@ function templateSummary(
   if (accountPostings.length === 2 && categoryPostings.length === 0) {
     const source = accountPostings.find((posting) => Number(posting.amount) < 0) ?? accountPostings[0];
     const destination = accountPostings.find((posting) => posting.id !== source.id);
+    const sourceAccount = source.account_id ? accountById.get(source.account_id) : undefined;
+    const destinationAccount = destination?.account_id ? accountById.get(destination.account_id) : undefined;
     return {
-      label: "Transfer",
-      detail: `${source.account_id ? accountById.get(source.account_id)?.name ?? "Account" : "Account"} → ${destination?.account_id ? accountById.get(destination.account_id)?.name ?? "Account" : "Account"}`,
+      contextKind: "transfer",
+      contextLabel: `${sourceAccount?.name ?? "Account"} → ${destinationAccount?.name ?? "Account"}`,
+      account: sourceAccount,
+      accountText: sourceAccount ? accountLabel(sourceAccount) : "Multiple accounts",
       amount: source.amount,
       currency: source.currency_code,
       guided: true,
@@ -127,17 +142,24 @@ function templateSummary(
       || (category.kind === "income" && Number(accountPostings[0].amount) > 0)
     ));
     return {
-      label: category?.kind === "income" ? "Income" : "Expense",
-      detail: `${category?.name ?? "Category"} · ${account ? accountLabel(account) : "Account"}`,
+      contextKind: "category",
+      contextLabel: category?.name ?? "No category",
+      account,
+      accountText: account ? accountLabel(account) : "Multiple accounts",
       amount: accountPostings[0].amount,
       currency: accountPostings[0].currency_code,
       guided,
     };
   }
 
+  const fallbackAccount = accountPostings[0]?.account_id
+    ? accountById.get(accountPostings[0].account_id)
+    : undefined;
   return {
-    label: "Split template",
-    detail: `${schedule.postings.length} postings · advanced template`,
+    contextKind: "split",
+    contextLabel: categoryPostings.length > 1 ? `Split · ${categoryPostings.length} categories` : "Multiple postings",
+    account: fallbackAccount,
+    accountText: fallbackAccount ? accountLabel(fallbackAccount) : "Multiple accounts",
     amount: null,
     currency: schedule.postings[0]?.currency_code ?? "PHP",
     guided: false,
@@ -193,18 +215,18 @@ function RecurringScheduleRow({
   onResume: () => void;
   onEnd: () => void;
 }) {
-  const summary = templateSummary(schedule, accounts, categories);
+  const summary = recurringContextSummary(schedule, accounts, categories);
 
   return (
     <li className="border-t border-border/70 first:border-t-0">
       <article className="px-4 py-4 sm:px-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1.25fr)_8rem_minmax(13rem,1.35fr)_8rem_5rem] xl:items-center">
           <button
             type="button"
             aria-expanded={expanded}
             aria-controls={`recurring-occurrences-${schedule.id}`}
             onClick={onToggle}
-            className="group flex min-w-0 flex-1 items-start gap-3 rounded-lg text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+            className="group flex min-w-0 items-start gap-3 rounded-lg text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40 sm:col-span-2 xl:col-span-1"
           >
             <ChevronDown aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} />
             <span className="min-w-0 flex-1">
@@ -212,59 +234,60 @@ function RecurringScheduleRow({
                 <span className="truncate text-sm font-medium group-hover:text-primary-strong">{schedule.name}</span>
                 <Badge variant={schedule.state === "active" ? "secondary" : "outline"} className="rounded-full text-[0.65rem]">{statusLabel(schedule.state)}</Badge>
               </span>
-              <span className="mt-1 block truncate text-xs text-muted-foreground">{recurrenceLabel(schedule)} · {summary.label}</span>
+              <span className="mt-1 block truncate text-xs text-muted-foreground">{recurrenceLabel(schedule)}</span>
             </span>
           </button>
 
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 pl-7 text-sm sm:grid-cols-4 sm:pl-7 xl:min-w-[34rem] xl:pl-0">
-            <div>
-              <p className="text-xs text-muted-foreground">Next due</p>
-              <p className="mt-1 font-mono font-medium">{dateLabel(schedule.next_occurrence_date)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Template</p>
-              <p className="mt-1 truncate font-medium" title={summary.detail}>{summary.detail}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Amount</p>
-              <p className={cn("mt-1 font-mono font-medium", summary.amount && Number(summary.amount) > 0 ? "text-tag-sea-glass-foreground" : "text-foreground")}>
-                {summary.amount ? formatSignedMoney(summary.amount, summary.currency) : "Multiple"}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Posted</p>
-              <p className="mt-1 font-mono font-medium">{schedule.posted_count}</p>
+          <div>
+            <p className="text-xs text-muted-foreground">Next due</p>
+            <p className="mt-1 font-mono font-medium">{dateLabel(schedule.next_occurrence_date)}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">Context</p>
+            <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+              <MoneyContextLine icon={moneyCategoryContextIcon(summary.contextKind)} label={summary.contextLabel} />
+              <MoneyContextLine icon={moneyAccountContextIcon(summary.account)} label={summary.accountText} />
             </div>
           </div>
-        </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Amount</p>
+            <p className={cn("mt-1 font-mono font-medium", summary.amount && Number(summary.amount) > 0 ? "text-tag-sea-glass-foreground" : "text-foreground")}>
+              {summary.amount ? formatSignedMoney(summary.amount, summary.currency) : "Multiple"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Posted</p>
+            <p className="mt-1 font-mono font-medium">{schedule.posted_count}</p>
+          </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 pl-7" aria-label={`${schedule.name} actions`}>
-          <Button type="button" variant="outline" size="sm" onClick={onEdit} disabled={pending} title={summary.guided ? "Edit schedule" : "View split template (read-only)"}>
-            {summary.guided ? <Pencil aria-hidden="true" /> : <Eye aria-hidden="true" />}
-            {summary.guided ? "Edit" : "View template"}
-          </Button>
-          {schedule.state === "active" ? (
-            <Button type="button" variant="outline" size="sm" onClick={onPause} disabled={pending}>
-              <Pause aria-hidden="true" />
-              Pause
+          <div className="mt-4 flex flex-wrap items-center gap-2 sm:col-span-2 xl:col-span-5" aria-label={`${schedule.name} actions`}>
+            <Button type="button" variant="outline" size="sm" onClick={onEdit} disabled={pending} title={summary.guided ? "Edit schedule" : "View schedule details (read-only)"}>
+              {summary.guided ? <Pencil aria-hidden="true" /> : <Eye aria-hidden="true" />}
+              {summary.guided ? "Edit" : "View details"}
             </Button>
-          ) : null}
-          {schedule.state === "paused" ? (
-            <Button type="button" variant="outline" size="sm" onClick={onResume} disabled={pending}>
-              <Play aria-hidden="true" />
-              Resume
-            </Button>
-          ) : null}
-          {schedule.state !== "ended" ? (
-            <Button type="button" variant="outline" size="sm" onClick={onEnd} disabled={pending}>
-              <Square aria-hidden="true" />
-              End schedule
-            </Button>
-          ) : null}
-          {!summary.guided ? <span className="text-xs text-muted-foreground">Manage state here; edit posting shape through API/MCP.</span> : null}
-        </div>
+            {schedule.state === "active" ? (
+              <Button type="button" variant="outline" size="sm" onClick={onPause} disabled={pending}>
+                <Pause aria-hidden="true" />
+                Pause
+              </Button>
+            ) : null}
+            {schedule.state === "paused" ? (
+              <Button type="button" variant="outline" size="sm" onClick={onResume} disabled={pending}>
+                <Play aria-hidden="true" />
+                Resume
+              </Button>
+            ) : null}
+            {schedule.state !== "ended" ? (
+              <Button type="button" variant="outline" size="sm" onClick={onEnd} disabled={pending}>
+                <Square aria-hidden="true" />
+                End schedule
+              </Button>
+            ) : null}
+            {!summary.guided ? <span className="text-xs text-muted-foreground">Manage state here; posting details can be edited through API/MCP.</span> : null}
+          </div>
 
-        {expanded ? <OccurrenceHistory schedule={schedule} /> : null}
+          {expanded ? <div className="sm:col-span-2 xl:col-span-5"><OccurrenceHistory schedule={schedule} /></div> : null}
+        </div>
       </article>
     </li>
   );
