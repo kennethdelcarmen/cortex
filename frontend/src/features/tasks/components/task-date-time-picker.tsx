@@ -4,7 +4,7 @@ import { CalendarDays, Check, Clock3, RotateCcw } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { FieldError } from "@/components/ui/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Popover,
@@ -22,6 +22,8 @@ type TaskDateTimePickerProps = {
   label: string;
   value: TaskDateTimeValue;
   error?: string;
+  invalid?: boolean;
+  describedBy?: string;
   disabled?: boolean;
   showFieldClear?: boolean;
   onChange: (value: TaskDateTimeValue) => void;
@@ -76,6 +78,8 @@ export function TaskDateTimePicker({
   label,
   value,
   error,
+  invalid = false,
+  describedBy,
   disabled = false,
   showFieldClear = true,
   onChange,
@@ -128,13 +132,17 @@ export function TaskDateTimePicker({
   }
 
   const errorId = `${id}-error`;
+  const isInvalid = Boolean(error) || invalid;
+  const controlDescribedBy = [describedBy, error ? errorId : undefined]
+    .filter(Boolean)
+    .join(" ") || undefined;
 
   return (
-    <div>
+    <Field data-invalid={isInvalid ? true : undefined} className="gap-1.5">
       <div className="flex items-center justify-between gap-3">
-        <label htmlFor={`${id}-date`} className="text-sm font-medium text-foreground">
+        <FieldLabel htmlFor={`${id}-date`} className="text-sm text-foreground">
           {label}
-        </label>
+        </FieldLabel>
         {showFieldClear && (value.date || value.time) ? (
           <Button
             type="button"
@@ -159,8 +167,8 @@ export function TaskDateTimePicker({
                 type="button"
                 variant="outline"
                 disabled={disabled}
-                aria-describedby={error ? errorId : undefined}
-                aria-invalid={Boolean(error)}
+                aria-describedby={controlDescribedBy}
+                aria-invalid={isInvalid || undefined}
                 className={cn(
                   "min-h-11 min-w-0 justify-start gap-2 bg-background font-normal",
                   error && "border-destructive",
@@ -201,8 +209,8 @@ export function TaskDateTimePicker({
                 type="button"
                 variant="outline"
                 disabled={disabled}
-                aria-describedby={error ? errorId : undefined}
-                aria-invalid={Boolean(error)}
+                aria-describedby={controlDescribedBy}
+                aria-invalid={isInvalid || undefined}
                 className={cn(
                   "min-h-11 min-w-0 justify-start gap-2 bg-background font-normal",
                   error && "border-destructive",
@@ -239,6 +247,6 @@ export function TaskDateTimePicker({
         </Popover>
       </div>
       {error ? <FieldError id={errorId} aria-live="polite" className="mt-2">{error}</FieldError> : null}
-    </div>
+    </Field>
   );
 }

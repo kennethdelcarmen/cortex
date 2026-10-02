@@ -7,9 +7,9 @@ import { TagPicker } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerTitle } from "@/components/ui/drawer";
-import { FieldError } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel, FieldTitle } from "@/components/ui/field";
+import { fieldDescribedBy } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type {
@@ -74,6 +74,8 @@ type FieldFeedback = {
   state: "saving" | "saved" | "error";
   message?: string;
 };
+
+const TASK_DATE_ORDER_ERROR = "The start time must be before or equal to the due time.";
 
 function taskToDraft(task: Task | null): TaskDraft {
   return {
@@ -252,10 +254,15 @@ export function TaskDetailsDrawer({
     const result = payloadForField(field, draft);
 
     if (!result.payload) {
-      setFeedback((current) => ({
-        ...current,
-        [field]: { state: "error", message: result.error },
-      }));
+    setFeedback((current) => ({
+      ...current,
+      ...(result.error === TASK_DATE_ORDER_ERROR && (field === "start_at" || field === "due_at")
+        ? {
+            start_at: { state: "error", message: result.error },
+            due_at: { state: "error", message: result.error },
+          }
+        : { [field]: { state: "error", message: result.error } }),
+    }));
       return;
     }
 
@@ -301,6 +308,29 @@ export function TaskDetailsDrawer({
 
   const titleError = feedback.title?.state === "error";
   const descriptionError = feedback.description?.state === "error";
+  const statusError = feedback.status?.state === "error" ? feedback.status.message : undefined;
+  const priorityError = feedback.priority?.state === "error" ? feedback.priority.message : undefined;
+  const tagsError = feedback.tags?.state === "error" ? feedback.tags.message : undefined;
+  const attachmentsError = feedback.attachments?.state === "error" ? feedback.attachments.message : undefined;
+  const taskWindowError = [feedback.start_at, feedback.due_at].find(
+    (item) => item?.state === "error" && item.message === TASK_DATE_ORDER_ERROR,
+  )?.message;
+  const startDateError =
+    feedback.start_at?.state === "error" && feedback.start_at.message !== TASK_DATE_ORDER_ERROR
+      ? feedback.start_at.message
+      : undefined;
+  const dueDateError =
+    feedback.due_at?.state === "error" && feedback.due_at.message !== TASK_DATE_ORDER_ERROR
+      ? feedback.due_at.message
+      : undefined;
+  const taskWindowErrorId = "task-details-window-error";
+  const taskWindowHintId = "task-details-window-hint";
+  const taskWindowDescribedBy = [
+    taskWindowHintId,
+    taskWindowError ? taskWindowErrorId : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange} swipeDirection="right">
@@ -320,54 +350,59 @@ export function TaskDetailsDrawer({
           </DrawerClose>
 
           <div className="flex-1 space-y-8 overflow-y-auto px-6 py-7 sm:px-8 sm:py-8">
-            <div>
-              <Label htmlFor="task-details-title" className="sr-only">
+            <Field data-invalid={titleError ? true : undefined} className="gap-1.5">
+              <FieldLabel htmlFor="task-details-title" className="sr-only">
                 Task title
-              </Label>
+              </FieldLabel>
               <Input
                 id="task-details-title"
                 value={values.title}
                 onChange={(event) => updateValue("title", event.target.value)}
                 onBlur={() => void saveField("title")}
                 maxLength={200}
-                aria-invalid={titleError}
+                aria-invalid={titleError || undefined}
                 aria-describedby={titleError ? "task-details-title-error" : undefined}
                 className="h-auto min-h-12 rounded-none border-0 border-b border-border/70 bg-transparent px-0 py-2 pr-12 !text-2xl font-semibold tracking-[-0.04em] shadow-none outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 dark:bg-transparent sm:!text-3xl"
                 placeholder="Task title"
               />
               <FieldState field="title" feedback={feedback.title} />
-            </div>
+            </Field>
 
             {task ? (
               <div className="space-y-7">
-                <div>
-                  <Label htmlFor="task-details-description" className="text-sm font-medium text-foreground">
+                <Field data-invalid={descriptionError ? true : undefined} className="gap-1.5">
+                  <FieldLabel htmlFor="task-details-description" className="text-sm text-foreground">
                     Description
-                  </Label>
+                  </FieldLabel>
                   <Textarea
                     id="task-details-description"
                     value={values.description}
                     onChange={(event) => updateValue("description", event.target.value)}
                     onBlur={() => void saveField("description")}
                     maxLength={10_000}
-                    aria-invalid={descriptionError}
+                    aria-invalid={descriptionError || undefined}
                     aria-describedby={descriptionError ? "task-details-description-error" : undefined}
                     placeholder="Add context only if it will help you move this forward."
-                    className="mt-2 min-h-28 resize-y bg-background leading-6"
+                    className="min-h-28 resize-y bg-background leading-6"
                   />
                   <FieldState field="description" feedback={feedback.description} />
-                </div>
+                </Field>
 
                 <div className="grid gap-5 sm:grid-cols-2">
-                  <div>
-                    <Label htmlFor="task-details-status" className="text-sm font-medium text-foreground">
+                  <Field data-invalid={statusError ? true : undefined} className="gap-1.5">
+                    <FieldLabel htmlFor="task-details-status" className="text-sm text-foreground">
                       Status
-                    </Label>
+                    </FieldLabel>
                     <Select
                       value={values.status}
                       onValueChange={(value) => handleSelectChange("status", value as TaskStatus)}
                     >
-                      <SelectTrigger id="task-details-status" className="mt-2 min-h-11 w-full bg-background">
+                      <SelectTrigger
+                        id="task-details-status"
+                        className="min-h-11 w-full bg-background"
+                        aria-invalid={statusError ? true : undefined}
+                        aria-describedby={fieldDescribedBy("task-details-status", undefined, statusError)}
+                      >
                         <SelectValue><TaskOptionValue option={statusOption(values.status)} /></SelectValue>
                       </SelectTrigger>
                       <SelectContent>
@@ -379,17 +414,22 @@ export function TaskDetailsDrawer({
                       </SelectContent>
                     </Select>
                     <FieldState field="status" feedback={feedback.status} />
-                  </div>
+                  </Field>
 
-                  <div>
-                    <Label htmlFor="task-details-priority" className="text-sm font-medium text-foreground">
+                  <Field data-invalid={priorityError ? true : undefined} className="gap-1.5">
+                    <FieldLabel htmlFor="task-details-priority" className="text-sm text-foreground">
                       Priority
-                    </Label>
+                    </FieldLabel>
                     <Select
                       value={values.priority}
                       onValueChange={(value) => handleSelectChange("priority", value as TaskPriority)}
                     >
-                      <SelectTrigger id="task-details-priority" className="mt-2 min-h-11 w-full bg-background">
+                      <SelectTrigger
+                        id="task-details-priority"
+                        className="min-h-11 w-full bg-background"
+                        aria-invalid={priorityError ? true : undefined}
+                        aria-describedby={fieldDescribedBy("task-details-priority", undefined, priorityError)}
+                      >
                         <SelectValue><TaskOptionValue option={priorityOption(values.priority)} /></SelectValue>
                       </SelectTrigger>
                       <SelectContent>
@@ -401,14 +441,14 @@ export function TaskDetailsDrawer({
                       </SelectContent>
                     </Select>
                     <FieldState field="priority" feedback={feedback.priority} />
-                  </div>
+                  </Field>
                 </div>
 
-                <div>
-                  <p className="text-sm font-medium text-foreground">Task window</p>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                <Field data-invalid={taskWindowError ? true : undefined} className="gap-1.5">
+                  <FieldTitle>Task window</FieldTitle>
+                  <FieldDescription id={taskWindowHintId} className="text-xs leading-5">
                     Dates use your browser’s local timezone. Time is optional; date-only values save at midnight.
-                  </p>
+                  </FieldDescription>
                   <div className="mt-3 grid gap-5 sm:grid-cols-2">
                     <div>
                       <TaskDateTimePicker
@@ -416,7 +456,9 @@ export function TaskDetailsDrawer({
                         label="Starts"
                         value={values.startAt}
                         showFieldClear={false}
-                        error={feedback.start_at?.state === "error" ? feedback.start_at.message : undefined}
+                        error={startDateError}
+                        invalid={Boolean(taskWindowError)}
+                        describedBy={taskWindowDescribedBy}
                         onChange={updateStartAt}
                         onCommit={commitStartAt}
                       />
@@ -430,7 +472,9 @@ export function TaskDetailsDrawer({
                         label="Due"
                         value={values.dueAt}
                         showFieldClear={false}
-                        error={feedback.due_at?.state === "error" ? feedback.due_at.message : undefined}
+                        error={dueDateError}
+                        invalid={Boolean(taskWindowError)}
+                        describedBy={taskWindowDescribedBy}
                         onChange={(value) => updateValue("dueAt", value)}
                         onCommit={(value) => {
                           const nextValues = { ...values, dueAt: value };
@@ -443,7 +487,12 @@ export function TaskDetailsDrawer({
                       ) : null}
                     </div>
                   </div>
-                </div>
+                  {taskWindowError ? (
+                    <FieldError id={taskWindowErrorId} aria-live="polite" className="leading-6">
+                      {taskWindowError}
+                    </FieldError>
+                  ) : null}
+                </Field>
 
                 {task.series_id ? (
                   <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby="task-details-series-heading">
@@ -529,28 +578,31 @@ export function TaskDetailsDrawer({
                   </section>
                 ) : null}
 
-                <div>
-                  <Label htmlFor="task-details-tags" className="text-sm font-medium text-foreground">
+                <Field data-invalid={tagsError ? true : undefined} className="gap-1.5">
+                  <FieldLabel htmlFor="task-details-tags" className="text-sm text-foreground">
                     Tags
-                  </Label>
-                  <div className="mt-2">
-                    <TagPicker
-                      id="task-details-tags"
-                      tags={availableTags}
-                      value={values.tags}
-                      onChange={(tags) => {
-                        const nextValues = { ...values, tags };
-                        setValues(nextValues);
-                        void saveField("tags", nextValues);
-                      }}
-                      onCreateTag={onCreateTag}
-                      disabled={Boolean(feedback.tags?.state === "saving")}
-                    />
-                  </div>
+                  </FieldLabel>
+                  <TagPicker
+                    id="task-details-tags"
+                    tags={availableTags}
+                    value={values.tags}
+                    onChange={(tags) => {
+                      const nextValues = { ...values, tags };
+                      setValues(nextValues);
+                      void saveField("tags", nextValues);
+                    }}
+                    onCreateTag={onCreateTag}
+                    disabled={Boolean(feedback.tags?.state === "saving")}
+                    invalid={Boolean(tagsError)}
+                    describedBy={fieldDescribedBy("task-details-tags", undefined, tagsError)}
+                  />
                   <FieldState field="tags" feedback={feedback.tags} />
-                </div>
+                </Field>
 
-                <div>
+                <Field data-invalid={attachmentsError ? true : undefined} className="gap-1.5">
+                  <FieldLabel htmlFor="task-details-attachments" className="text-sm text-foreground">
+                    Attachments
+                  </FieldLabel>
                   <FileAttachmentPicker
                     id="task-details-attachments"
                     value={values.attachments}
@@ -560,9 +612,12 @@ export function TaskDetailsDrawer({
                       void saveField("attachments", nextValues);
                     }}
                     disabled={feedback.attachments?.state === "saving"}
+                    invalid={Boolean(attachmentsError)}
+                    describedBy={fieldDescribedBy("task-details-attachments", undefined, attachmentsError)}
+                    hideLabel
                   />
                   <FieldState field="attachments" feedback={feedback.attachments} />
-                </div>
+                </Field>
               </div>
             ) : null}
           </div>

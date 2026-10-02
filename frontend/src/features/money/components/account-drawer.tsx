@@ -11,8 +11,9 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { FieldError } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   moneyAccountTypeOptions,
@@ -37,6 +38,16 @@ type AccountDrawerProps = {
 
 const amountPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
+type AccountErrorField =
+  | "name"
+  | "lastFour"
+  | "openingBalance"
+  | "creditLimit"
+  | "statementCloseDay"
+  | "paymentDueDay";
+
+type AccountFieldErrors = Partial<Record<AccountErrorField, string>>;
+
 export function AccountDrawer({
   open,
   onOpenChange,
@@ -53,14 +64,16 @@ export function AccountDrawer({
   const [creditLimit, setCreditLimit] = useState("");
   const [statementCloseDay, setStatementCloseDay] = useState("");
   const [paymentDueDay, setPaymentDueDay] = useState("");
-  const [error, setError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setError(undefined);
+      setFormError(undefined);
+      setFieldErrors({});
       setName(account?.name ?? "");
       setAccountType(account?.account_type ?? "checking");
       setInstitutionName(account?.institution_name ?? "");
@@ -84,7 +97,8 @@ export function AccountDrawer({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(undefined);
+    setFormError(undefined);
+    setFieldErrors({});
 
     const normalizedName = name.trim();
     const normalizedInstitution = institutionName.trim();
@@ -94,31 +108,40 @@ export function AccountDrawer({
     const normalizedStatementCloseDay = statementCloseDay.trim();
     const normalizedPaymentDueDay = paymentDueDay.trim();
 
-    if (!normalizedName) {
-      setError("Enter an account name before saving.");
-      return;
-    }
+    const nextFieldErrors: AccountFieldErrors = {};
+    if (!normalizedName) nextFieldErrors.name = "Enter an account name before saving.";
     if (normalizedLastFour && !/^\d{4}$/.test(normalizedLastFour)) {
-      setError("The last four digits must contain exactly four numbers.");
-      return;
+      nextFieldErrors.lastFour = "The last four digits must contain exactly four numbers.";
     }
     if (!editing && !amountPattern.test(normalizedOpeningBalance)) {
-      setError("Enter a valid opening amount, such as 0 or 125.50.");
-      return;
+      nextFieldErrors.openingBalance = "Enter a valid opening amount, such as 0 or 125.50.";
     }
     if (accountType === "credit_card") {
       if (!amountPattern.test(normalizedCreditLimit) || Number(normalizedCreditLimit) <= 0) {
-        setError("Enter a positive credit limit for this card.");
-        return;
+        nextFieldErrors.creditLimit = "Enter a positive credit limit for this card.";
       }
       if (!/^(?:[1-9]|[12]\d|3[01])$/.test(normalizedStatementCloseDay)) {
-        setError("Statement closing day must be between 1 and 31.");
-        return;
+        nextFieldErrors.statementCloseDay = "Statement closing day must be between 1 and 31.";
       }
       if (!/^(?:[1-9]|[12]\d|3[01])$/.test(normalizedPaymentDueDay)) {
-        setError("Payment due day must be between 1 and 31.");
-        return;
+        nextFieldErrors.paymentDueDay = "Payment due day must be between 1 and 31.";
       }
+    }
+
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      const firstInvalidField = [
+        "name",
+        "lastFour",
+        "openingBalance",
+        "creditLimit",
+        "statementCloseDay",
+        "paymentDueDay",
+      ].find((field) => nextFieldErrors[field as AccountErrorField]);
+      if (firstInvalidField) {
+        window.requestAnimationFrame(() => document.getElementById(`account-${firstInvalidField.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`)?.focus());
+      }
+      return;
     }
 
     const payload: MoneyAccountCreateInput | MoneyAccountUpdateInput = editing
@@ -150,8 +173,18 @@ export function AccountDrawer({
       await onSave(account?.id ?? null, payload);
       onOpenChange(false);
     } catch (reason) {
-      setError(describeMoneyError(reason));
+      setFormError(describeMoneyError(reason));
     }
+  }
+
+  function clearFieldError(field: AccountErrorField) {
+    setFormError(undefined);
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
   }
 
   return (
@@ -169,32 +202,32 @@ export function AccountDrawer({
           </div>
         </DrawerHeader>
 
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+        <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col" aria-describedby={formError ? "account-form-error" : undefined}>
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8">
-            {error ? (
-              <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm leading-5 text-destructive">
-                {error}
-              </div>
+            {formError ? (
+              <FieldError id="account-form-error" aria-live="polite" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 leading-5">
+                {formError}
+              </FieldError>
             ) : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="flex flex-col gap-2 text-sm sm:col-span-2">
-                <Label htmlFor="account-name">Account name</Label>
+              <FormField id="account-name" label="Account name" error={fieldErrors.name} className="sm:col-span-2">
                 <Input
                   id="account-name"
                   className="h-11"
                   value={name}
-                  onChange={(event) => setName(event.target.value)}
+                  onChange={(event) => { setName(event.target.value); clearFieldError("name"); }}
                   placeholder="e.g. Main checking"
                   maxLength={200}
                   required
                   disabled={pending}
                   autoFocus
+                  aria-invalid={Boolean(fieldErrors.name) || undefined}
+                  aria-describedby={fieldDescribedBy("account-name", undefined, fieldErrors.name)}
                 />
-              </div>
+              </FormField>
 
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor="account-type">Account type</Label>
+              <FormField id="account-type" label="Account type">
                 <Select
                   value={accountType}
                   onValueChange={(value) => value && setAccountType(value as MoneyAccountType)}
@@ -210,10 +243,9 @@ export function AccountDrawer({
                   </SelectContent>
                 </Select>
                 {editing ? <p className="text-xs leading-5 text-muted-foreground">Type is fixed after creation.</p> : null}
-              </div>
+              </FormField>
 
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor="account-currency">Currency</Label>
+              <FormField id="account-currency" label="Currency">
                 <Select value={currencyCode} onValueChange={(value) => value && setCurrencyCode(value)} disabled={editing || pending}>
                   <SelectTrigger id="account-currency" className="h-11 w-full bg-background">
                     <SelectValue>{currencyCode}</SelectValue>
@@ -223,10 +255,9 @@ export function AccountDrawer({
                   </SelectContent>
                 </Select>
                 {editing ? <p className="text-xs leading-5 text-muted-foreground">Currency is fixed after creation.</p> : null}
-              </div>
+              </FormField>
 
-              <div className="flex flex-col gap-2 text-sm sm:col-span-2">
-                <Label htmlFor="account-institution">Institution <span className="text-muted-foreground">(optional)</span></Label>
+              <FormField id="account-institution" label={<>Institution <span className="text-muted-foreground">(optional)</span></>} className="sm:col-span-2">
                 <Input
                   id="account-institution"
                   className="h-11"
@@ -236,91 +267,97 @@ export function AccountDrawer({
                   maxLength={200}
                   disabled={pending}
                 />
-              </div>
+              </FormField>
 
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor="account-last-four">Last four digits <span className="text-muted-foreground">(optional)</span></Label>
+              <FormField id="account-last-four" label={<>Last four digits <span className="text-muted-foreground">(optional)</span></>} error={fieldErrors.lastFour}>
                 <Input
                   id="account-last-four"
                   className="h-11"
                   value={lastFour}
-                  onChange={(event) => setLastFour(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                  onChange={(event) => { setLastFour(event.target.value.replace(/\D/g, "").slice(0, 4)); clearFieldError("lastFour"); }}
                   placeholder="1234"
                   inputMode="numeric"
                   maxLength={4}
                   disabled={pending}
+                  aria-invalid={Boolean(fieldErrors.lastFour) || undefined}
+                  aria-describedby={fieldDescribedBy("account-last-four", undefined, fieldErrors.lastFour)}
                 />
-              </div>
+              </FormField>
 
               {!editing && accountType !== "credit_card" ? (
-                <div className="flex flex-col gap-2 text-sm">
-                  <Label htmlFor="account-opening-balance">Opening balance · {currencyCode}</Label>
+                <FormField id="account-opening-balance" label={`Opening balance · ${currencyCode}`} error={fieldErrors.openingBalance}>
                   <Input
                     id="account-opening-balance"
                     className="h-11"
                     value={openingBalance}
-                    onChange={(event) => setOpeningBalance(event.target.value)}
+                    onChange={(event) => { setOpeningBalance(event.target.value); clearFieldError("openingBalance"); }}
                     placeholder="0.00"
                     inputMode="decimal"
                     disabled={pending}
+                    aria-invalid={Boolean(fieldErrors.openingBalance) || undefined}
+                    aria-describedby={fieldDescribedBy("account-opening-balance", undefined, fieldErrors.openingBalance)}
                   />
-                </div>
+                </FormField>
               ) : null}
 
               {accountType === "credit_card" ? (
                 <>
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="account-credit-limit">Credit limit · {currencyCode}</Label>
+                  <FormField id="account-credit-limit" label={`Credit limit · ${currencyCode}`} error={fieldErrors.creditLimit}>
                     <Input
                       id="account-credit-limit"
                       className="h-11"
                       value={creditLimit}
-                      onChange={(event) => setCreditLimit(event.target.value)}
+                      onChange={(event) => { setCreditLimit(event.target.value); clearFieldError("creditLimit"); }}
                       placeholder="100000.00"
                       inputMode="decimal"
                       disabled={pending}
+                      aria-invalid={Boolean(fieldErrors.creditLimit) || undefined}
+                      aria-describedby={fieldDescribedBy("account-credit-limit", undefined, fieldErrors.creditLimit)}
                     />
-                  </div>
+                  </FormField>
                   {!editing ? (
-                    <div className="flex flex-col gap-2 text-sm">
-                      <Label htmlFor="account-opening-balance">Amount owed · {currencyCode}</Label>
+                    <FormField id="account-opening-balance" label={`Amount owed · ${currencyCode}`} error={fieldErrors.openingBalance}>
                       <Input
                         id="account-opening-balance"
                         className="h-11"
                         value={openingBalance}
-                        onChange={(event) => setOpeningBalance(event.target.value)}
+                        onChange={(event) => { setOpeningBalance(event.target.value); clearFieldError("openingBalance"); }}
                         placeholder="0.00"
                         inputMode="decimal"
                         disabled={pending}
+                        aria-invalid={Boolean(fieldErrors.openingBalance) || undefined}
+                        aria-describedby={fieldDescribedBy("account-opening-balance", undefined, fieldErrors.openingBalance)}
                       />
-                    </div>
+                    </FormField>
                   ) : null}
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="account-statement-close-day">Statement closes on day</Label>
+                  <FormField id="account-statement-close-day" label="Statement closes on day" error={fieldErrors.statementCloseDay}>
                     <Input
                       id="account-statement-close-day"
                       className="h-11"
                       value={statementCloseDay}
-                      onChange={(event) => setStatementCloseDay(event.target.value.replace(/\D/g, "").slice(0, 2))}
+                      onChange={(event) => { setStatementCloseDay(event.target.value.replace(/\D/g, "").slice(0, 2)); clearFieldError("statementCloseDay"); }}
                       placeholder="15"
                       inputMode="numeric"
                       maxLength={2}
                       disabled={pending}
+                      aria-invalid={Boolean(fieldErrors.statementCloseDay) || undefined}
+                      aria-describedby={fieldDescribedBy("account-statement-close-day", undefined, fieldErrors.statementCloseDay)}
                     />
-                  </div>
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="account-payment-due-day">Payment due on day</Label>
+                  </FormField>
+                  <FormField id="account-payment-due-day" label="Payment due on day" error={fieldErrors.paymentDueDay}>
                     <Input
                       id="account-payment-due-day"
                       className="h-11"
                       value={paymentDueDay}
-                      onChange={(event) => setPaymentDueDay(event.target.value.replace(/\D/g, "").slice(0, 2))}
+                      onChange={(event) => { setPaymentDueDay(event.target.value.replace(/\D/g, "").slice(0, 2)); clearFieldError("paymentDueDay"); }}
                       placeholder="5"
                       inputMode="numeric"
                       maxLength={2}
                       disabled={pending}
+                      aria-invalid={Boolean(fieldErrors.paymentDueDay) || undefined}
+                      aria-describedby={fieldDescribedBy("account-payment-due-day", undefined, fieldErrors.paymentDueDay)}
                     />
-                  </div>
+                  </FormField>
                 </>
               ) : null}
             </div>
@@ -361,7 +398,7 @@ export function AccountDrawer({
 
           <DrawerFooter className="border-t border-border/70 bg-card px-6 py-4 sm:flex-row sm:justify-end sm:px-8">
             <DrawerClose render={<Button type="button" variant="outline" size="lg" disabled={pending} />}>Cancel</DrawerClose>
-            <Button type="submit" size="lg" disabled={pending || !name.trim()}>
+            <Button type="submit" size="lg" disabled={pending}>
               {pending ? "Saving…" : editing ? "Save changes" : "Create account"}
             </Button>
           </DrawerFooter>

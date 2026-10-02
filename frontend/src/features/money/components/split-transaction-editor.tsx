@@ -3,8 +3,9 @@
 import { ArrowDownLeft, ArrowUpRight, Plus, Trash2 } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { SelectItem, SelectSeparator } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { MoneyCategory } from "../api";
@@ -25,6 +26,14 @@ export type SplitTransactionRow = {
   amount: string;
 };
 
+export type SplitTransactionRowErrors = Partial<Record<"category" | "amount" | "label", string>>;
+
+export type SplitTransactionErrors = {
+  total?: string;
+  balance?: string;
+  rows?: Record<string, SplitTransactionRowErrors>;
+};
+
 type SplitTransactionEditorProps = {
   direction: SplitDirection;
   onDirectionChange: (direction: SplitDirection) => void;
@@ -37,6 +46,7 @@ type SplitTransactionEditorProps = {
   resourceLabels: Record<string, string>;
   onCreateCategory: (rowIndex: number) => void;
   disabled?: boolean;
+  errors?: SplitTransactionErrors;
 };
 
 function newRow(index: number): SplitTransactionRow {
@@ -59,6 +69,7 @@ export function SplitTransactionEditor({
   resourceLabels,
   onCreateCategory,
   disabled = false,
+  errors,
 }: SplitTransactionEditorProps) {
   const availableCategories = categoriesForKind(categories, direction);
   const totalMinor = parseMoneyMinorUnits(totalAmount, currencyCode);
@@ -119,8 +130,7 @@ export function SplitTransactionEditor({
         </div>
       </div>
 
-      <div className="flex flex-col gap-2 text-sm">
-        <Label htmlFor="split-total-amount">Total amount · {currencyCode}</Label>
+      <FormField id="split-total-amount" label={`Total amount · ${currencyCode}`} error={errors?.total}>
         <Input
           id="split-total-amount"
           className="h-11 bg-background"
@@ -130,8 +140,10 @@ export function SplitTransactionEditor({
           onChange={(event) => onTotalAmountChange(event.target.value)}
           disabled={disabled}
           required
+          aria-invalid={Boolean(errors?.total) || undefined}
+          aria-describedby={fieldDescribedBy("split-total-amount", undefined, errors?.total)}
         />
-      </div>
+      </FormField>
 
       <div className="space-y-3" aria-label="Split category rows">
         {rows.map((row, index) => (
@@ -164,13 +176,13 @@ export function SplitTransactionEditor({
                   updateRow(row.id, { categoryId: value });
                 }}
                 disabled={disabled}
+                error={errors?.rows?.[row.id]?.category}
               >
                 {availableCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
                 <SelectSeparator />
                 <SelectItem value="__create_category__">Create new {direction} category…</SelectItem>
               </MoneySelectField>
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor={`split-amount-${row.id}`}>Amount · {currencyCode}</Label>
+              <FormField id={`split-amount-${row.id}`} label={`Amount · ${currencyCode}`} error={errors?.rows?.[row.id]?.amount}>
                 <Input
                   id={`split-amount-${row.id}`}
                   className="h-11 bg-background"
@@ -180,11 +192,12 @@ export function SplitTransactionEditor({
                   onChange={(event) => updateRow(row.id, { amount: event.target.value })}
                   disabled={disabled}
                   required
+                  aria-invalid={Boolean(errors?.rows?.[row.id]?.amount) || undefined}
+                  aria-describedby={fieldDescribedBy(`split-amount-${row.id}`, undefined, errors?.rows?.[row.id]?.amount)}
                 />
-              </div>
+              </FormField>
             </div>
-            <div className="flex flex-col gap-2 text-sm">
-              <Label htmlFor={`split-label-${row.id}`}>Label</Label>
+            <FormField id={`split-label-${row.id}`} label="Label" error={errors?.rows?.[row.id]?.label}>
               <Input
                 id={`split-label-${row.id}`}
                 className="h-10 bg-background"
@@ -194,8 +207,10 @@ export function SplitTransactionEditor({
                 maxLength={200}
                 disabled={disabled}
                 required
+                aria-invalid={Boolean(errors?.rows?.[row.id]?.label) || undefined}
+                aria-describedby={fieldDescribedBy(`split-label-${row.id}`, undefined, errors?.rows?.[row.id]?.label)}
               />
-            </div>
+            </FormField>
           </div>
         ))}
       </div>
@@ -220,6 +235,7 @@ export function SplitTransactionEditor({
           </p>
         </div>
       </div>
+      {errors?.balance ? <FieldError id="split-balance-error" aria-live="polite" className="leading-6">{errors.balance}</FieldError> : null}
     </section>
   );
 }

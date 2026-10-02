@@ -11,8 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 export type MoneyResourceKind = "payee" | "category";
 
@@ -49,7 +49,7 @@ export function MoneyResourceCreateDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(28rem,calc(100vw-2rem))] rounded-xl border-border bg-card p-6 text-card-foreground shadow-none sm:max-w-none sm:p-7">
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} noValidate>
           <DialogHeader>
             <DialogTitle className="text-xl tracking-[-0.03em]">Create {label}</DialogTitle>
             <DialogDescription className="mt-2 leading-6">
@@ -57,19 +57,20 @@ export function MoneyResourceCreateDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-6 space-y-2">
-            <Label htmlFor={fieldId}>Name</Label>
-            <Input
-              id={fieldId}
-              className="h-11"
-              value={name}
-              onChange={(event) => onNameChange(event.target.value)}
-              placeholder={`Enter ${label} name`}
-              autoFocus
-              disabled={pending}
-              aria-invalid={Boolean(error)}
-            />
-            {error ? <p role="alert" className="text-sm leading-5 text-destructive">{error}</p> : null}
+          <div className="mt-6">
+            <FormField id={fieldId} label="Name" error={error}>
+              <Input
+                id={fieldId}
+                className="h-11"
+                value={name}
+                onChange={(event) => onNameChange(event.target.value)}
+                placeholder={`Enter ${label} name`}
+                autoFocus
+                disabled={pending}
+                aria-invalid={Boolean(error) || undefined}
+                aria-describedby={fieldDescribedBy(fieldId, undefined, error)}
+              />
+            </FormField>
           </div>
 
           <DialogFooter className="mt-7 -mx-6 -mb-6 rounded-b-xl border-t border-border/70 bg-card px-6 py-4 sm:-mx-7 sm:-mb-7 sm:px-7">

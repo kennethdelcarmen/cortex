@@ -19,15 +19,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { BlockingErrorDialog, useFeedback } from "@/components/feedback";
 import { FileAttachmentPicker } from "@/components/file-attachment-picker";
 import { TagBadge } from "@/components/tag-badge";
 import { TagPicker } from "@/components/tag-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -65,6 +65,9 @@ type NoteDraft = {
   tags: string[];
   attachments: StoredFile[];
 };
+
+type NoteFormErrorField = "title" | "body";
+type NoteFormErrors = Partial<Record<NoteFormErrorField, string>>;
 
 const todayFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -189,8 +192,7 @@ function TagEditor({
   onChange: (tags: string[]) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <Label htmlFor="note-tags">Tags</Label>
+    <FormField id="note-tags" label="Tags">
       <TagPicker
         id="note-tags"
         tags={availableTags}
@@ -199,7 +201,7 @@ function TagEditor({
         onCreateTag={onCreateTag}
         disabled={disabled}
       />
-    </div>
+    </FormField>
   );
 }
 
@@ -314,7 +316,9 @@ function NotePanel({
   onCreateTag,
   editing,
   saving,
+  fieldErrors,
   onDraftChange,
+  onFieldErrorClear,
   onEdit,
   onCancel,
   onSave,
@@ -326,15 +330,20 @@ function NotePanel({
   onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   editing: boolean;
   saving: boolean;
+  fieldErrors: NoteFormErrors;
   onDraftChange: (draft: NoteDraft) => void;
+  onFieldErrorClear: (field: NoteFormErrorField) => void;
   onEdit: () => void;
   onCancel: () => void;
   onSave: () => void;
   onDelete: () => void;
 }) {
   const htmlChange = useCallback(
-    (body: string) => onDraftChange({ ...draft, body }),
-    [draft, onDraftChange],
+    (body: string) => {
+      onFieldErrorClear("body");
+      onDraftChange({ ...draft, body });
+    },
+    [draft, onDraftChange, onFieldErrorClear],
   );
 
   if (!note && !editing) {
@@ -356,25 +365,27 @@ function NotePanel({
   const title = editing ? draft.title : note ? noteTitle(note) : "New journal entry";
   const editorIdentity = `${note?.id ?? "new"}-${editing ? "edit" : "read"}`;
 
-  return (
-    <div className="min-w-0">
+  const panelContent = (
+    <>
       <header className="border-b border-border/70 px-5 py-5 sm:px-7 sm:py-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             {editing ? (
-              <div className="space-y-2">
-                <Label htmlFor="note-title">Title</Label>
+              <FormField id="note-title" label="Title" error={fieldErrors.title}>
                 <Input
                   id="note-title"
                   value={draft.title}
-                  onChange={(event) =>
-                    onDraftChange({ ...draft, title: event.target.value })
-                  }
+                  onChange={(event) => {
+                    onFieldErrorClear("title");
+                    onDraftChange({ ...draft, title: event.target.value });
+                  }}
                   placeholder="Give this entry a clear title"
                   maxLength={200}
+                  aria-invalid={fieldErrors.title ? true : undefined}
+                  aria-describedby={fieldDescribedBy("note-title", undefined, fieldErrors.title)}
                   className="h-11 border-0 bg-transparent px-0 text-2xl font-semibold tracking-[-0.035em] shadow-none focus-visible:ring-0 sm:text-3xl"
                 />
-              </div>
+              </FormField>
             ) : (
               <h2 className="max-w-3xl text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">
                 {title}
@@ -409,8 +420,7 @@ function NotePanel({
 
         {editing ? (
           <div className="mt-5 grid gap-5 sm:grid-cols-[11rem_minmax(0,1fr)]">
-            <div className="space-y-2">
-              <Label htmlFor="note-date">Journal date</Label>
+            <FormField id="note-date" label="Journal date">
               <Input
                 id="note-date"
                 type="date"
@@ -418,8 +428,9 @@ function NotePanel({
                 onChange={(event) =>
                   onDraftChange({ ...draft, journalDate: event.target.value })
                 }
+                className="h-11 bg-background/70 text-foreground"
               />
-            </div>
+            </FormField>
             <TagEditor
               tags={draft.tags}
               availableTags={availableTags}
@@ -447,22 +458,39 @@ function NotePanel({
           </div>
         )}
         <div className="mt-5">
-          <FileAttachmentPicker
-            id="note-attachments"
-            value={editing ? draft.attachments : note?.attachments ?? []}
-            onChange={(attachments) => onDraftChange({ ...draft, attachments })}
-            disabled={!editing || saving}
-          />
+          <FormField id="note-attachments" label="Attachments">
+            <FileAttachmentPicker
+              id="note-attachments"
+              value={editing ? draft.attachments : note?.attachments ?? []}
+              onChange={(attachments) => onDraftChange({ ...draft, attachments })}
+              disabled={!editing || saving}
+              hideLabel
+            />
+          </FormField>
         </div>
       </header>
 
       <div className="memory-editor px-5 py-6 sm:px-7 sm:py-8">
-        <RichTextEditor
-          key={editorIdentity}
-          initialHtml={draft.body}
-          readOnly={!editing}
-          onHtmlChange={htmlChange}
-        />
+        {editing ? (
+          <FormField id="note-body" label="Body" error={fieldErrors.body}>
+            <RichTextEditor
+              key={editorIdentity}
+              id="note-body"
+              initialHtml={draft.body}
+              readOnly={false}
+              invalid={Boolean(fieldErrors.body)}
+              describedBy={fieldDescribedBy("note-body", undefined, fieldErrors.body)}
+              onHtmlChange={htmlChange}
+            />
+          </FormField>
+        ) : (
+          <RichTextEditor
+            key={editorIdentity}
+            initialHtml={draft.body}
+            readOnly
+            onHtmlChange={htmlChange}
+          />
+        )}
       </div>
 
       {editing ? (
@@ -474,14 +502,32 @@ function NotePanel({
             <Button type="button" variant="outline" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
-            <Button type="button" onClick={onSave} disabled={saving}>
+            <Button type="submit" disabled={saving}>
               {saving ? <LoaderCircle data-icon="inline-start" className="animate-spin" aria-hidden="true" /> : null}
               {saving ? "Saving…" : note ? "Save changes" : "Save entry"}
             </Button>
           </div>
         </footer>
       ) : null}
-    </div>
+    </>
+  );
+
+  if (!editing) {
+    return <div className="min-w-0">{panelContent}</div>;
+  }
+
+  return (
+    <form
+      className="min-w-0"
+      onSubmit={(event: FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (!saving) {
+          onSave();
+        }
+      }}
+    >
+      {panelContent}
+    </form>
   );
 }
 
@@ -574,6 +620,7 @@ function MemoryWorkspace() {
   const [pendingDelete, setPendingDelete] = useState<Note | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<NoteFormErrors>({});
   const selectionKey = `${urlState.noteId ?? "none"}:${selectedNote?.id ?? "none"}`;
   const [draftSelectionKey, setDraftSelectionKey] = useState("");
 
@@ -590,6 +637,10 @@ function MemoryWorkspace() {
       setEditing(false);
     }
   }
+
+  useEffect(() => {
+    setFieldErrors({});
+  }, [selectionKey]);
 
   const updateUrl = useCallback(
     (update: (params: URLSearchParams) => void, replace = true) => {
@@ -666,6 +717,7 @@ function MemoryWorkspace() {
       void queryClient.invalidateQueries({ queryKey: noteSummaryQueryKey });
       void queryClient.invalidateQueries({ queryKey: filesQueryKey });
       setDraft(noteToDraft(savedNote));
+      setFieldErrors({});
       setEditing(false);
       updateUrl((params) => params.set("note", savedNote.id));
       feedback.success({
@@ -738,6 +790,7 @@ function MemoryWorkspace() {
     }
 
     setEditing(false);
+    setFieldErrors({});
     if (urlState.noteId === "new") {
       selectNote(null);
     }
@@ -746,28 +799,30 @@ function MemoryWorkspace() {
   function discardAndContinue() {
     setDiscardOpen(false);
     setDraft(null);
+    setFieldErrors({});
     setEditing(false);
     selectNote(pendingSelection);
     setPendingSelection(null);
   }
 
   function handleSave() {
-    if (!draft) {
+    if (!draft || saveMutation.isPending) {
       return;
     }
 
+    const nextFieldErrors: NoteFormErrors = {};
     if (!htmlToText(draft.body)) {
-      feedback.error({
-        title: "Write something before saving.",
-        description: "A note needs a body. The title and journal date can stay empty.",
-      });
-      return;
+      nextFieldErrors.body = "Write something before saving.";
+    }
+    if (draft.title.length > 200) {
+      nextFieldErrors.title = "Keep the title at 200 characters or fewer.";
     }
 
-    if (draft.title.length > 200) {
-      feedback.error({
-        title: "The title is too long.",
-        description: "Keep the title under 200 characters.",
+    setFieldErrors(nextFieldErrors);
+    const firstInvalidField = nextFieldErrors.title ? "note-title" : nextFieldErrors.body ? "note-body" : null;
+    if (firstInvalidField) {
+      window.requestAnimationFrame(() => {
+        document.getElementById(firstInvalidField)?.focus();
       });
       return;
     }
@@ -986,8 +1041,22 @@ function MemoryWorkspace() {
               onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
               editing={editing}
               saving={saveMutation.isPending}
+              fieldErrors={fieldErrors}
               onDraftChange={setDraft}
-              onEdit={() => setEditing(true)}
+              onFieldErrorClear={(field) => {
+                setFieldErrors((current) => {
+                  if (!current[field]) {
+                    return current;
+                  }
+                  const next = { ...current };
+                  delete next[field];
+                  return next;
+                });
+              }}
+              onEdit={() => {
+                setFieldErrors({});
+                setEditing(true);
+              }}
               onCancel={handleCancel}
               onSave={handleSave}
               onDelete={() => {
@@ -1005,7 +1074,9 @@ function MemoryWorkspace() {
               onCreateTag={(payload) => createTagMutation.mutateAsync(payload)}
               editing={false}
               saving={false}
+              fieldErrors={{}}
               onDraftChange={() => undefined}
+              onFieldErrorClear={() => undefined}
               onEdit={() => undefined}
               onCancel={() => undefined}
               onSave={() => undefined}

@@ -7,8 +7,9 @@ import { useFeedback } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Drawer, DrawerClose, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { FieldError } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { SelectItem, SelectSeparator } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { currentLocalDateInput } from "@/lib/date";
@@ -51,7 +52,12 @@ import {
 } from "../utils";
 import { MoneyResourceCreateDialog, type MoneyResourceKind } from "./money-resource-create-dialog";
 import { MoneySelectField } from "./money-select-field";
-import { createSplitRows, SplitTransactionEditor, type SplitTransactionRow } from "./split-transaction-editor";
+import {
+  createSplitRows,
+  SplitTransactionEditor,
+  type SplitTransactionErrors,
+  type SplitTransactionRow,
+} from "./split-transaction-editor";
 
 type TransactionDrawerProps = {
   open: boolean;
@@ -68,6 +74,18 @@ type TransactionDrawerProps = {
 type EntryMode = TransactionMode | "installment" | "split";
 
 const amountPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+type TransactionErrorField =
+  | "name"
+  | "date"
+  | "account"
+  | "destination"
+  | "category"
+  | "amount"
+  | "termMonths"
+  | "feeAmount";
+
+type TransactionFieldErrors = Partial<Record<TransactionErrorField, string>>;
 
 function transactionDraft(transaction: MoneyTransaction, categories: MoneyCategory[]) {
   if (isSplitTransaction(transaction)) {
@@ -148,7 +166,9 @@ export function TransactionDrawer({
   const [splitRows, setSplitRows] = useState<SplitTransactionRow[]>(() => createSplitRows());
   const [termMonths, setTermMonths] = useState("12");
   const [feeAmount, setFeeAmount] = useState("0");
-  const [error, setError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<TransactionFieldErrors>({});
+  const [splitErrors, setSplitErrors] = useState<SplitTransactionErrors>({});
   const [resourceDialogKind, setResourceDialogKind] = useState<MoneyResourceKind | null>(null);
   const [resourceDialogDisplayKind, setResourceDialogDisplayKind] = useState<MoneyResourceKind>("payee");
   const [splitCategoryRowIndex, setSplitCategoryRowIndex] = useState<number | null>(null);
@@ -196,7 +216,9 @@ export function TransactionDrawer({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setError(undefined);
+      setFormError(undefined);
+      setFieldErrors({});
+      setSplitErrors({});
       setResourceDialogKind(null);
       setSplitCategoryRowIndex(null);
       setResourceName("");
@@ -232,9 +254,9 @@ export function TransactionDrawer({
         setPayeeId("");
         setMemo("");
         setAmount("");
-        setAccountId(activeAccounts[0]?.id ?? "");
-        setDestinationAccountId(activeAccounts[1]?.id ?? "");
-        setCategoryId(categoriesForKind(categories, "expense")[0]?.id ?? "");
+        setAccountId("");
+        setDestinationAccountId("");
+        setCategoryId("");
         setSplitDirectionValue("expense");
         setSplitRows(createSplitRows());
       }
@@ -315,37 +337,64 @@ export function TransactionDrawer({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(undefined);
+    setFormError(undefined);
+    setFieldErrors({});
+    setSplitErrors({});
     const sourceAccount = activeAccounts.find((account) => account.id === accountId);
     const destinationAccount = activeAccounts.find((account) => account.id === destinationAccountId);
     const normalizedAmount = formatAmountInput(amount, sourceAccount?.currency_code ?? selectedCurrency);
 
-    if (!date || !name.trim() || !sourceAccount || !normalizedAmount) {
-      setError("Enter a transaction name, choose an account and date, and provide a positive amount before saving.");
+    const nextFieldErrors: TransactionFieldErrors = {};
+    if (!name.trim()) nextFieldErrors.name = "Enter a transaction name before saving.";
+    if (!date) nextFieldErrors.date = "Choose a transaction date before saving.";
+    if (!sourceAccount) nextFieldErrors.account = "Choose an account before saving.";
+    if (!normalizedAmount) nextFieldErrors.amount = "Provide a positive amount before saving.";
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      const firstInvalidField = nextFieldErrors.name
+        ? "transaction-name"
+        : nextFieldErrors.date
+          ? "transaction-date"
+          : nextFieldErrors.account
+            ? "transaction-account"
+            : "transaction-amount";
+      window.requestAnimationFrame(() => document.getElementById(firstInvalidField)?.focus());
       return;
     }
-    if (mode === "transfer" && (!destinationAccount || destinationAccount.id === sourceAccount.id)) {
-      setError("Choose two different accounts for a transfer.");
+    if (!sourceAccount) return;
+    if (mode === "transfer" && !destinationAccount) {
+      setFieldErrors({ destination: "Choose a destination account before saving." });
+      window.requestAnimationFrame(() => document.getElementById("transaction-destination")?.focus());
+      return;
+    }
+    if (mode === "transfer" && destinationAccount?.id === sourceAccount.id) {
+      setFieldErrors({ destination: "Choose a different destination account." });
+      window.requestAnimationFrame(() => document.getElementById("transaction-destination")?.focus());
       return;
     }
     if (mode === "transfer" && destinationAccount?.currency_code !== sourceAccount.currency_code) {
-      setError("Transfers must stay within one currency.");
+      setFieldErrors({ destination: "Transfers must stay within one currency." });
+      window.requestAnimationFrame(() => document.getElementById("transaction-destination")?.focus());
       return;
     }
     if (mode !== "transfer" && mode !== "split" && !categoryId) {
-      setError("Choose a category before saving.");
+      setFieldErrors({ category: "Choose a category before saving." });
+      window.requestAnimationFrame(() => document.getElementById("transaction-category")?.focus());
       return;
     }
     if (mode === "installment" && sourceAccount?.account_type !== "credit_card") {
-      setError("Installment purchases must use a credit-card account.");
+      setFieldErrors({ account: "Installment purchases must use a credit-card account." });
+      window.requestAnimationFrame(() => document.getElementById("transaction-account")?.focus());
       return;
     }
     if (mode === "installment" && (!/^\d+$/.test(termMonths) || Number(termMonths) < 1 || Number(termMonths) > 120)) {
-      setError("Choose an installment term between 1 and 120 months.");
+      setFieldErrors({ termMonths: "Choose an installment term between 1 and 120 months." });
+      window.requestAnimationFrame(() => document.getElementById("installment-term")?.focus());
       return;
     }
     if (mode === "installment" && !amountPattern.test(feeAmount.trim())) {
-      setError("Enter a valid installment fee, such as 0 or 500.00.");
+      setFieldErrors({ feeAmount: "Enter a valid installment fee, such as 0 or 500.00." });
+      window.requestAnimationFrame(() => document.getElementById("installment-fee")?.focus());
       return;
     }
 
@@ -374,11 +423,13 @@ export function TransactionDrawer({
       if (mode === "split") {
         const totalMinor = parseMoneyMinorUnits(normalizedAmount, currencyCode);
         if (totalMinor === null || totalMinor <= 0) {
-          setError("Enter a valid positive total amount.");
+          setSplitErrors({ total: "Enter a valid positive total amount." });
+          window.requestAnimationFrame(() => document.getElementById("split-total-amount")?.focus());
           return;
         }
         if (splitRows.length < 2) {
-          setError("Add at least two category rows to create a split.");
+          setSplitErrors({ balance: "Add at least two category rows to create a split." });
+          window.requestAnimationFrame(() => document.getElementById("split-total-amount")?.focus());
           return;
         }
         const rowValues = splitRows.map((row) => ({
@@ -387,12 +438,30 @@ export function TransactionDrawer({
           amountMinor: parseMoneyMinorUnits(row.amount, currencyCode),
         }));
         if (rowValues.some((row) => !row.categoryId || !row.label || row.amountMinor === null || row.amountMinor <= 0)) {
-          setError("Choose a category, enter a label, and provide a positive amount for every split row.");
+          const rowErrors = Object.fromEntries(rowValues.flatMap((row) => {
+            const errors = {
+              ...(!row.categoryId ? { category: "Choose a category for every split row." } : {}),
+              ...(!row.label ? { label: "Enter a label for every split row." } : {}),
+              ...(row.amountMinor === null || row.amountMinor <= 0 ? { amount: "Provide a positive amount for every split row." } : {}),
+            };
+            return Object.keys(errors).length ? [[row.id, errors]] : [];
+          }));
+          setSplitErrors({ rows: rowErrors });
+          const firstInvalidRow = rowValues.find((row) => rowErrors[row.id]);
+          const firstInvalidControl = firstInvalidRow
+            ? rowErrors[firstInvalidRow.id].category
+              ? `split-category-${firstInvalidRow.id}`
+              : rowErrors[firstInvalidRow.id].amount
+                ? `split-amount-${firstInvalidRow.id}`
+                : `split-label-${firstInvalidRow.id}`
+            : "split-total-amount";
+          window.requestAnimationFrame(() => document.getElementById(firstInvalidControl)?.focus());
           return;
         }
         const allocatedMinor = rowValues.reduce((sum, row) => sum + (row.amountMinor ?? 0), 0);
         if (allocatedMinor !== totalMinor) {
-          setError("Split category amounts must add up exactly to the total amount.");
+          setSplitErrors({ balance: "Split category amounts must add up exactly to the total amount." });
+          window.requestAnimationFrame(() => document.getElementById("split-total-amount")?.focus());
           return;
         }
         const accountAmount = splitDirectionValue === "expense" ? `-${normalizedAmount}` : normalizedAmount;
@@ -437,8 +506,18 @@ export function TransactionDrawer({
       onSaved?.();
       onOpenChange(false);
     } catch (reason) {
-      setError(describeMoneyError(reason));
+      setFormError(describeMoneyError(reason));
     }
+  }
+
+  function clearFieldError(field: TransactionErrorField) {
+    setFormError(undefined);
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
   }
 
   async function handlePostingAction(action: "clear" | "reconcile", postingId: string) {
@@ -545,7 +624,7 @@ export function TransactionDrawer({
             onRestore={handleRestore}
           />
         ) : (
-          <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col" aria-describedby={formError ? "transaction-form-error" : undefined}>
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8">
               <div className="grid grid-cols-5 gap-1 rounded-lg border border-border/80 bg-background p-1" role="group" aria-label="Transaction type">
                 {(["expense", "income", "transfer", "split", "installment"] as EntryMode[]).map((item) => {
@@ -561,6 +640,8 @@ export function TransactionDrawer({
                         setMode(item);
                         if (item !== "split") setCategoryId("");
                         if (item === "split" && splitRows.length < 2) setSplitRows(createSplitRows());
+                        setFieldErrors({});
+                        setSplitErrors({});
                       }}
                     >
                       <Icon aria-hidden="true" />
@@ -571,21 +652,29 @@ export function TransactionDrawer({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex flex-col gap-2 text-sm sm:col-span-2">
-                  <Label htmlFor="transaction-name">Transaction name</Label>
-                  <Input id="transaction-name" className="h-11" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Weekly groceries" maxLength={200} required />
-                </div>
-                <div className="flex flex-col gap-2 text-sm">
-                  <Label htmlFor="transaction-date">Date</Label>
-                  <Input id="transaction-date" type="date" className="h-11" value={date} onChange={(event) => setDate(event.target.value)} required />
-                </div>
+                <FormField id="transaction-name" label="Transaction name" error={fieldErrors.name} className="sm:col-span-2">
+                  <Input id="transaction-name" className="h-11" value={name} onChange={(event) => { setName(event.target.value); clearFieldError("name"); }} placeholder="e.g. Weekly groceries" maxLength={200} required aria-invalid={Boolean(fieldErrors.name) || undefined} aria-describedby={fieldDescribedBy("transaction-name", undefined, fieldErrors.name)} />
+                </FormField>
+                <FormField id="transaction-date" label="Date" error={fieldErrors.date}>
+                  <Input
+                    id="transaction-date"
+                    type="date"
+                    className="h-11"
+                    value={date}
+                    onChange={(event) => { setDate(event.target.value); clearFieldError("date"); }}
+                    required
+                    aria-invalid={Boolean(fieldErrors.date) || undefined}
+                    aria-describedby={fieldDescribedBy("transaction-date", undefined, fieldErrors.date)}
+                  />
+                </FormField>
                 <MoneySelectField
                   id="transaction-account"
                   label={mode === "transfer" ? "From account" : "Account"}
                   value={accountId}
                   selectedLabel={selectedAccount ? `${accountLabel(selectedAccount)} · ${selectedAccount.currency_code}` : undefined}
                   emptyLabel="Choose an account"
-                  onValueChange={setAccountId}
+                  onValueChange={(value) => { setAccountId(value); clearFieldError("account"); }}
+                  error={fieldErrors.account}
                 >
                   {activeAccounts.map((account) => <SelectItem key={account.id} value={account.id}>{accountLabel(account)} · {account.currency_code}</SelectItem>)}
                 </MoneySelectField>
@@ -597,16 +686,18 @@ export function TransactionDrawer({
                   onDirectionChange={(nextDirection) => {
                     setSplitDirectionValue(nextDirection);
                     setSplitRows((current) => current.map((row) => ({ ...row, categoryId: "" })));
+                    setSplitErrors({});
                   }}
                   totalAmount={amount}
-                  onTotalAmountChange={setAmount}
+                  onTotalAmountChange={(value) => { setAmount(value); clearFieldError("amount"); setSplitErrors((current) => ({ ...current, total: undefined, balance: undefined })); }}
                   rows={splitRows}
-                  onRowsChange={setSplitRows}
+                  onRowsChange={(update) => { setSplitRows(update); setSplitErrors({}); }}
                   categories={categories}
                   currencyCode={selectedCurrency}
                   resourceLabels={resourceLabels}
                   onCreateCategory={handleSplitCategoryCreate}
                   disabled={pending}
+                  errors={splitErrors}
                 />
               ) : mode === "transfer" ? (
                 <MoneySelectField
@@ -615,7 +706,8 @@ export function TransactionDrawer({
                   value={destinationAccountId}
                   selectedLabel={(() => { const destination = activeAccounts.find((account) => account.id === destinationAccountId); return destination ? `${accountLabel(destination)} · ${destination.currency_code}` : undefined; })()}
                   emptyLabel="Choose a destination"
-                  onValueChange={setDestinationAccountId}
+                  onValueChange={(value) => { setDestinationAccountId(value); clearFieldError("destination"); }}
+                  error={fieldErrors.destination}
                 >
                   {activeAccounts.map((account) => <SelectItem key={account.id} value={account.id}>{accountLabel(account)} · {account.currency_code}</SelectItem>)}
                 </MoneySelectField>
@@ -627,26 +719,54 @@ export function TransactionDrawer({
                     value={categoryId}
                     selectedLabel={modeCategories.find((category) => category.id === categoryId)?.name ?? resourceLabels[categoryId]}
                     emptyLabel="Choose a category"
-                    onValueChange={(value) => handleResourceSelect("category", value)}
+                    onValueChange={(value) => { handleResourceSelect("category", value); clearFieldError("category"); }}
+                    error={fieldErrors.category}
                   >
                     {modeCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
                     <SelectSeparator />
                     <SelectItem value="__create_category__">Create new {mode} category…</SelectItem>
                   </MoneySelectField>
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="transaction-amount">Amount · {selectedCurrency}</Label>
-                  <Input id="transaction-amount" className="h-11" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required />
-                  </div>
+                  <FormField id="transaction-amount" label={`Amount · ${selectedCurrency}`} error={fieldErrors.amount}>
+                    <Input
+                      id="transaction-amount"
+                      className="h-11"
+                      inputMode="decimal"
+                      placeholder="0.00"
+                      value={amount}
+                      onChange={(event) => { setAmount(event.target.value); clearFieldError("amount"); }}
+                      required
+                      aria-invalid={Boolean(fieldErrors.amount) || undefined}
+                      aria-describedby={fieldDescribedBy("transaction-amount", undefined, fieldErrors.amount)}
+                    />
+                  </FormField>
                   {mode === "installment" ? (
                     <>
-                      <div className="flex flex-col gap-2 text-sm">
-                        <Label htmlFor="installment-term">Term in months</Label>
-                        <Input id="installment-term" className="h-11" inputMode="numeric" value={termMonths} onChange={(event) => setTermMonths(event.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="12" required />
-                      </div>
-                      <div className="flex flex-col gap-2 text-sm">
-                        <Label htmlFor="installment-fee">Fees included · {selectedCurrency}</Label>
-                        <Input id="installment-fee" className="h-11" inputMode="decimal" value={feeAmount} onChange={(event) => setFeeAmount(event.target.value)} placeholder="0.00" required />
-                      </div>
+                      <FormField id="installment-term" label="Term in months" error={fieldErrors.termMonths}>
+                        <Input
+                          id="installment-term"
+                          className="h-11"
+                          inputMode="numeric"
+                          value={termMonths}
+                          onChange={(event) => { setTermMonths(event.target.value.replace(/\D/g, "").slice(0, 3)); clearFieldError("termMonths"); }}
+                          placeholder="12"
+                          required
+                          aria-invalid={Boolean(fieldErrors.termMonths) || undefined}
+                          aria-describedby={fieldDescribedBy("installment-term", undefined, fieldErrors.termMonths)}
+                        />
+                      </FormField>
+                      <FormField id="installment-fee" label={`Fees included · ${selectedCurrency}`} error={fieldErrors.feeAmount}>
+                        <Input
+                          id="installment-fee"
+                          className="h-11"
+                          inputMode="decimal"
+                          value={feeAmount}
+                          onChange={(event) => { setFeeAmount(event.target.value); clearFieldError("feeAmount"); }}
+                          placeholder="0.00"
+                          required
+                          aria-invalid={Boolean(fieldErrors.feeAmount) || undefined}
+                          aria-describedby={fieldDescribedBy("installment-fee", undefined, fieldErrors.feeAmount)}
+                        />
+                      </FormField>
                       <p className="text-xs leading-5 text-muted-foreground sm:col-span-2">This records a purchase commitment. The card is charged one installment at each statement close; paying the card bill is tracked separately.</p>
                     </>
                   ) : null}
@@ -654,10 +774,19 @@ export function TransactionDrawer({
               )}
 
               {mode === "transfer" ? (
-                <div className="flex flex-col gap-2 text-sm">
-                  <Label htmlFor="transaction-transfer-amount">Amount · {selectedCurrency}</Label>
-                  <Input id="transaction-transfer-amount" className="h-11" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required />
-                </div>
+                <FormField id="transaction-transfer-amount" label={`Amount · ${selectedCurrency}`} error={fieldErrors.amount}>
+                  <Input
+                    id="transaction-transfer-amount"
+                    className="h-11"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={amount}
+                    onChange={(event) => { setAmount(event.target.value); clearFieldError("amount"); }}
+                    required
+                    aria-invalid={Boolean(fieldErrors.amount) || undefined}
+                    aria-describedby={fieldDescribedBy("transaction-transfer-amount", undefined, fieldErrors.amount)}
+                  />
+                </FormField>
               ) : null}
 
               <MoneySelectField
@@ -673,12 +802,11 @@ export function TransactionDrawer({
                 <SelectItem value="__create_payee__">Create new payee…</SelectItem>
               </MoneySelectField>
 
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor="transaction-memo">Memo <span className="font-normal text-muted-foreground">Optional</span></Label>
+              <FormField id="transaction-memo" label={<>Memo <span className="font-normal text-muted-foreground">Optional</span></>}>
                 <Textarea id="transaction-memo" rows={3} placeholder="Add useful context" value={memo} onChange={(event) => setMemo(event.target.value)} />
-              </div>
+              </FormField>
 
-              {error ? <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p> : null}
+              {formError ? <FieldError id="transaction-form-error" aria-live="polite" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">{formError}</FieldError> : null}
             </div>
             <DrawerFooter className="flex-row justify-end border-t border-border/70 bg-card px-6 py-4 sm:px-8">
               <DrawerClose type="button" render={<Button variant="outline" disabled={pending} />}>Cancel</DrawerClose>

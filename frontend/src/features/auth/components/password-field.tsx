@@ -5,7 +5,11 @@ import { useState } from "react";
 import type { InputHTMLAttributes } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
+import {
+  fieldDescribedBy,
+  FormField,
+  inputClassName,
+} from "@/components/ui/form-field";
 
 type PasswordFieldProps = InputHTMLAttributes<HTMLInputElement> & {
   id: string;

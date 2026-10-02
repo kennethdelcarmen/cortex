@@ -25,6 +25,8 @@ type TagPickerProps = {
   onChange: (value: string[]) => void;
   onCreateTag?: (payload: { name: string; color: TagColor }) => Promise<Tag>;
   disabled?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
   maxTags?: number;
   presentation?: TagPickerPresentation;
 };
@@ -36,6 +38,8 @@ export function TagPicker({
   onChange,
   onCreateTag,
   disabled = false,
+  invalid = false,
+  describedBy,
   maxTags = 20,
   presentation = "inline",
 }: TagPickerProps) {
@@ -206,6 +210,8 @@ export function TagPicker({
               type="button"
               variant="ghost"
               disabled={disabled}
+              aria-invalid={invalid || undefined}
+              aria-describedby={describedBy}
               aria-label={value.length ? `Edit file tags. Assigned: ${value.join(", ")}` : "Add tags"}
               className="h-auto min-h-9 w-full justify-start gap-1.5 overflow-hidden rounded-md px-1.5 py-1 text-left hover:bg-muted/60"
             />
@@ -236,10 +242,7 @@ export function TagPicker({
 
   return (
     <div className="space-y-2">
-      <div
-        id={id}
-        className="flex min-h-11 flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background px-2 py-1.5"
-      >
+      <div className="flex min-h-11 flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background px-2 py-1.5">
         {value.map((name) => {
           const tag = byName.get(name);
           return (
@@ -261,10 +264,13 @@ export function TagPicker({
           <PopoverTrigger
             render={
               <Button
+                id={id}
                 type="button"
                 variant="ghost"
                 size="sm"
                 disabled={disabled || value.length >= maxTags}
+                aria-invalid={invalid || undefined}
+                aria-describedby={describedBy}
                 aria-label="Add tag"
                 className="h-8 gap-1.5 text-muted-foreground"
               />

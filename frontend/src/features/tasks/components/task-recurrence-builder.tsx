@@ -3,7 +3,7 @@
 import { Globe2, Repeat2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FieldError } from "@/components/ui/field";
+import { Field, FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,7 @@ import {
   RECURRENCE_FREQUENCIES,
   RECURRENCE_WEEKDAYS,
   recurrenceSummary,
+  type RecurrenceFormErrorField,
   type RecurrenceFormValues,
 } from "../recurrence";
 import type { TaskDateTimeValue } from "../utils";
@@ -29,6 +30,7 @@ type TaskRecurrenceBuilderProps = {
   onChange: (values: RecurrenceFormValues) => void;
   disabled?: boolean;
   error?: string;
+  errorField?: RecurrenceFormErrorField;
   idPrefix?: string;
   showToggle?: boolean;
 };
@@ -39,9 +41,20 @@ export function TaskRecurrenceBuilder({
   onChange,
   disabled = false,
   error,
+  errorField,
   idPrefix = "task-recurrence",
   showToggle = true,
 }: TaskRecurrenceBuilderProps) {
+  const errorId = `${idPrefix}-error`;
+
+  function controlHasError(field: RecurrenceFormErrorField) {
+    return Boolean(error) && (!errorField || errorField === field);
+  }
+
+  function controlDescribedBy(field: RecurrenceFormErrorField) {
+    return controlHasError(field) ? errorId : undefined;
+  }
+
   function update<Key extends keyof RecurrenceFormValues>(
     key: Key,
     value: RecurrenceFormValues[Key],
@@ -109,7 +122,10 @@ export function TaskRecurrenceBuilder({
       </div>
 
       {values.frequency === "weekly" ? (
-        <fieldset>
+        <fieldset
+          aria-invalid={controlHasError("weekdays") || undefined}
+          aria-describedby={controlDescribedBy("weekdays")}
+        >
           <legend className="text-sm font-medium text-foreground">On these days</legend>
           <div className="mt-2 grid grid-cols-4 gap-2 sm:grid-cols-7">
             {RECURRENCE_WEEKDAYS.map((weekday) => {
@@ -121,6 +137,8 @@ export function TaskRecurrenceBuilder({
                   variant={selected ? "secondary" : "outline"}
                   aria-pressed={selected}
                   aria-label={weekday.label}
+                  aria-describedby={controlDescribedBy("weekdays")}
+                  aria-invalid={controlHasError("weekdays") || undefined}
                   disabled={disabled}
                   onClick={() => toggleWeekday(weekday.value)}
                   className={cn(
@@ -151,6 +169,8 @@ export function TaskRecurrenceBuilder({
               update("monthDay", event.target.value === "" ? "" : Number(event.target.value))
             }
             disabled={disabled}
+            aria-invalid={controlHasError("monthDay") || undefined}
+            aria-describedby={controlDescribedBy("monthDay")}
             className="mt-2 min-h-11 max-w-32 bg-background"
           />
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -199,6 +219,8 @@ export function TaskRecurrenceBuilder({
                 update("day", event.target.value === "" ? "" : Number(event.target.value))
               }
               disabled={disabled}
+              aria-invalid={controlHasError("day") || undefined}
+              aria-describedby={controlDescribedBy("day")}
               className="mt-2 min-h-11 bg-background"
             />
           </div>
@@ -246,6 +268,8 @@ export function TaskRecurrenceBuilder({
               value={values.untilDate}
               onChange={(event) => update("untilDate", event.target.value)}
               disabled={disabled}
+              aria-invalid={controlHasError("untilDate") || undefined}
+              aria-describedby={controlDescribedBy("untilDate")}
               className="min-h-11 bg-background"
             />
           </div>
@@ -263,6 +287,8 @@ export function TaskRecurrenceBuilder({
               value={values.occurrenceCount}
               onChange={(event) => update("occurrenceCount", Number(event.target.value) || 1)}
               disabled={disabled}
+              aria-invalid={controlHasError("occurrenceCount") || undefined}
+              aria-describedby={controlDescribedBy("occurrenceCount")}
               className="min-h-11 bg-background"
             />
             <span className="text-sm text-muted-foreground">occurrences</span>
@@ -282,6 +308,8 @@ export function TaskRecurrenceBuilder({
             value={values.timezone}
             onChange={(event) => update("timezone", event.target.value)}
             disabled={disabled}
+            aria-invalid={controlHasError("timezone") || undefined}
+            aria-describedby={controlDescribedBy("timezone")}
             className="min-h-11 bg-background pl-9 font-mono text-xs"
             placeholder="Asia/Manila"
           />
@@ -301,16 +329,35 @@ export function TaskRecurrenceBuilder({
         {recurrenceSummary(values, anchor)}
       </p>
 
-      {error ? <FieldError id={`${idPrefix}-error`} aria-live="polite" className="leading-6">{error}</FieldError> : null}
     </div>
   );
 
+  const errorMessage = error ? (
+    <FieldError id={errorId} aria-live="polite" className="leading-6">
+      {error}
+    </FieldError>
+  ) : null;
+
   if (!showToggle) {
-    return content;
+    return (
+      <Field
+        data-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        className="gap-5"
+      >
+        {content}
+        {errorMessage}
+      </Field>
+    );
   }
 
   return (
-    <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby={`${idPrefix}-heading`}>
+    <Field
+      data-invalid={error ? true : undefined}
+      aria-labelledby={`${idPrefix}-heading`}
+      aria-describedby={error ? errorId : undefined}
+      className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5"
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -341,7 +388,7 @@ export function TaskRecurrenceBuilder({
         </div>
       </div>
       {values.enabled ? <div className="mt-5">{content}</div> : null}
-      {!values.enabled && error ? <FieldError id={`${idPrefix}-error`} aria-live="polite" className="mt-3 leading-6">{error}</FieldError> : null}
-    </section>
+      {!values.enabled && error ? <div className="mt-3">{errorMessage}</div> : null}
+    </Field>
   );
 }

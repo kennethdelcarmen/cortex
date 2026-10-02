@@ -130,49 +130,85 @@ export function recurrenceValuesToPayload(values: RecurrenceFormValues): TaskRec
   };
 }
 
-export function recurrenceFormError(
+export type RecurrenceFormErrorField =
+  | "timezone"
+  | "anchor"
+  | "weekdays"
+  | "monthDay"
+  | "day"
+  | "untilDate"
+  | "occurrenceCount";
+
+export type RecurrenceFormValidationError = {
+  field: RecurrenceFormErrorField;
+  message: string;
+};
+
+export function recurrenceFormValidationError(
   values: RecurrenceFormValues,
   anchor?: TaskDateTimeValue,
-) {
+): RecurrenceFormValidationError | undefined {
   if (!values.enabled) {
     return undefined;
   }
 
   if (!values.timezone.trim()) {
-    return "Choose a time zone for this recurring task.";
+    return {
+      field: "timezone",
+      message: "Choose a time zone for this recurring task.",
+    };
   }
 
   if (!anchor?.date) {
-    return "Set a start or due time to choose the first occurrence.";
+    return {
+      field: "anchor",
+      message: "Set a start or due time to choose the first occurrence.",
+    };
   }
 
   if (values.frequency === "weekly" && values.weekdays.length === 0) {
-    return "Choose at least one day for a weekly task.";
+    return {
+      field: "weekdays",
+      message: "Choose at least one day for a weekly task.",
+    };
   }
 
   if (
     values.frequency === "monthly" &&
     (values.monthDay === "" || values.monthDay < 1 || values.monthDay > 31)
   ) {
-    return "Enter a day from 1 to 31.";
+    return { field: "monthDay", message: "Enter a day from 1 to 31." };
   }
 
   if (
     values.frequency === "yearly" &&
     (values.day === "" || values.day < 1 || values.day > 31)
   ) {
-    return "Enter a day from 1 to 31.";
+    return { field: "day", message: "Enter a day from 1 to 31." };
   }
 
   if (values.endMode === "date" && !values.untilDate) {
-    return "Choose an end date or select Never.";
+    return {
+      field: "untilDate",
+      message: "Choose an end date or select Never.",
+    };
   }
 
   if (values.endMode === "count" && (!values.occurrenceCount || values.occurrenceCount < 1)) {
-    return "Enter at least one occurrence or select Never.";
+    return {
+      field: "occurrenceCount",
+      message: "Enter at least one occurrence or select Never.",
+    };
   }
 
   return undefined;
+}
+
+export function recurrenceFormError(
+  values: RecurrenceFormValues,
+  anchor?: TaskDateTimeValue,
+) {
+  return recurrenceFormValidationError(values, anchor)?.message;
 }
 
 function frequencyText(values: RecurrenceFormValues) {

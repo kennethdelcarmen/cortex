@@ -6,15 +6,17 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 export const inputClassName =
   "mt-2 h-11 bg-background/70 text-foreground shadow-sm";
 
 type FormFieldProps = {
   id: string;
-  label: string;
+  label: ReactNode;
   hint?: string;
   error?: string;
+  className?: string;
   children: ReactNode;
 };
 
@@ -28,12 +30,12 @@ export function fieldDescribedBy(
   return [hintId, errorId].filter(Boolean).join(" ") || undefined;
 }
 
-export function FormField({ id, label, hint, error, children }: FormFieldProps) {
+export function FormField({ id, label, hint, error, className, children }: FormFieldProps) {
   const hintId = hint ? id + "-hint" : undefined;
   const errorId = error ? id + "-error" : undefined;
 
   return (
-    <Field data-invalid={Boolean(error) || undefined} className="gap-1.5">
+    <Field data-invalid={error ? true : undefined} className={cn("gap-1.5", className)}>
       <FieldLabel htmlFor={id} className="text-sm text-foreground">
         {label}
       </FieldLabel>

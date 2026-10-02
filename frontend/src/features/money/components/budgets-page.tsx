@@ -36,8 +36,9 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { FieldError } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { SelectItem, SelectSeparator } from "@/components/ui/select";
 import { useCurrentUser } from "@/features/auth/hooks";
@@ -76,6 +77,9 @@ type BudgetRowData = {
 };
 
 const amountPattern = /^(?:0|[1-9]\d*)(?:\.\d+)?$/;
+
+type BudgetErrorField = "category" | "amount";
+type BudgetFieldErrors = Partial<Record<BudgetErrorField, string>>;
 
 function MetricCard({
   label,
@@ -367,7 +371,8 @@ function BudgetDrawer({
   const feedback = useFeedback();
   const [categoryId, setCategoryId] = useState("");
   const [amount, setAmount] = useState("");
-  const [error, setError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<BudgetFieldErrors>({});
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryName, setCategoryName] = useState("");
   const [categoryError, setCategoryError] = useState<string>();
@@ -385,7 +390,8 @@ function BudgetDrawer({
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setError(undefined);
+      setFormError(undefined);
+      setFieldErrors({});
       setCategoryDialogOpen(false);
       setCategoryName("");
       setCategoryError(undefined);
@@ -398,6 +404,13 @@ function BudgetDrawer({
   }, [budget, initialCategoryId, open]);
 
   function handleCategorySelect(value: string) {
+    setFormError(undefined);
+    setFieldErrors((current) => {
+      if (!current.category) return current;
+      const next = { ...current };
+      delete next.category;
+      return next;
+    });
     if (value === "__create_category__") {
       setCategoryDialogOpen(true);
       setCategoryName("");
@@ -428,21 +441,23 @@ function BudgetDrawer({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(undefined);
+    setFormError(undefined);
+    setFieldErrors({});
     const normalizedAmount = amount.trim();
     const maxFractionDigits = currencyCode === "JPY" || currencyCode === "KRW" ? 0 : 2;
     const decimalDigits = normalizedAmount.includes(".") ? normalizedAmount.split(".")[1]?.length ?? 0 : 0;
 
-    if (!categoryId) {
-      setError("Choose an expense category before saving.");
-      return;
-    }
+    const nextFieldErrors: BudgetFieldErrors = {};
+    if (!categoryId) nextFieldErrors.category = "Choose an expense category before saving.";
     if (!amountPattern.test(normalizedAmount)) {
-      setError("Enter a non-negative amount, such as 0 or 125.50.");
-      return;
+      nextFieldErrors.amount = "Enter an amount greater than 0.";
+    } else if (decimalDigits > maxFractionDigits) {
+      nextFieldErrors.amount = `Use no more than ${maxFractionDigits} decimal places for ${currencyCode}.`;
     }
-    if (decimalDigits > maxFractionDigits) {
-      setError(`Use no more than ${maxFractionDigits} decimal places for ${currencyCode}.`);
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      const firstInvalidField = nextFieldErrors.category ? "budget-category" : "budget-amount";
+      window.requestAnimationFrame(() => document.getElementById(firstInvalidField)?.focus());
       return;
     }
 
@@ -450,7 +465,7 @@ function BudgetDrawer({
       await onSave(categoryId, { amount: normalizedAmount });
       onOpenChange(false);
     } catch (reason) {
-      setError(describeMoneyError(reason));
+      setFormError(describeMoneyError(reason));
     }
   }
 
@@ -472,9 +487,9 @@ function BudgetDrawer({
           </div>
         </DrawerHeader>
 
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+        <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col" aria-describedby={formError ? "budget-form-error" : undefined}>
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8">
-            {error ? <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm leading-5 text-destructive">{error}</div> : null}
+            {formError ? <FieldError id="budget-form-error" aria-live="polite" className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 leading-5">{formError}</FieldError> : null}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2 text-sm sm:col-span-2">
@@ -486,6 +501,7 @@ function BudgetDrawer({
                   emptyLabel="Choose a category"
                   onValueChange={handleCategorySelect}
                   disabled={editing || formPending}
+                  error={fieldErrors.category}
                 >
                   {availableCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
                   {!editing ? <><SelectSeparator /><SelectItem value="__create_category__">Create new expense category…</SelectItem></> : null}
@@ -493,21 +509,21 @@ function BudgetDrawer({
                 {editing ? <p className="text-xs leading-5 text-muted-foreground">Category is fixed after creation.</p> : null}
               </div>
 
-              <div className="flex flex-col gap-2 text-sm">
-                <Label htmlFor="budget-amount">Monthly limit · {currencyCode}</Label>
+              <FormField id="budget-amount" label={`Monthly limit · ${currencyCode}`} error={fieldErrors.amount}>
                 <Input
                   id="budget-amount"
                   className="h-11"
                   value={amount}
-                  onChange={(event) => setAmount(event.target.value)}
+                  onChange={(event) => { setAmount(event.target.value); setFormError(undefined); setFieldErrors((current) => { if (!current.amount) return current; const next = { ...current }; delete next.amount; return next; }); }}
                   placeholder={currencyCode === "JPY" || currencyCode === "KRW" ? "0" : "0.00"}
                   inputMode="decimal"
-                  aria-invalid={Boolean(error)}
+                  aria-invalid={Boolean(fieldErrors.amount) || undefined}
+                  aria-describedby={fieldDescribedBy("budget-amount", undefined, fieldErrors.amount)}
                   disabled={formPending}
                   autoFocus
                   required
                 />
-              </div>
+              </FormField>
 
               <dl className="rounded-lg border border-border/70 bg-background/60 p-3 text-sm">
                 <div>
@@ -530,7 +546,7 @@ function BudgetDrawer({
 
           <DrawerFooter className="border-t border-border/70 bg-card px-6 py-4 sm:flex-row sm:justify-end sm:px-8">
             <DrawerClose render={<Button type="button" variant="outline" size="lg" disabled={formPending} />}>Cancel</DrawerClose>
-            <Button type="submit" size="lg" disabled={formPending || !categoryId || !amount.trim()}>
+            <Button type="submit" size="lg" disabled={formPending}>
               {pending ? "Saving…" : editing ? "Save changes" : "Add budget"}
             </Button>
           </DrawerFooter>

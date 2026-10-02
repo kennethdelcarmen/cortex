@@ -17,7 +17,11 @@ import {
   setupOwner,
   verifySetupSecret,
 } from "../api";
-import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
+import {
+  fieldDescribedBy,
+  FormField,
+  inputClassName,
+} from "@/components/ui/form-field";
 import { PasswordField } from "./password-field";
 
 type SetupBlockingError = {

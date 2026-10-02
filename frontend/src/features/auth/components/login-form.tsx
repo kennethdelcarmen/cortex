@@ -12,7 +12,11 @@ import { useActivityLogger } from "@/features/activity/hooks";
 import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api/client";
 import { authQueryKey, describeAuthError, login } from "../api";
-import { fieldDescribedBy, FormField, inputClassName } from "./form-field";
+import {
+  fieldDescribedBy,
+  FormField,
+  inputClassName,
+} from "@/components/ui/form-field";
 import { PasswordField } from "./password-field";
 
 const loginFormSchema = z.object({

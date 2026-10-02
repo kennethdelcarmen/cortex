@@ -1,7 +1,21 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, CreditCard, ReceiptText, Repeat2, Search, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
+import {
+  ArrowLeftRight,
+  Building2,
+  ChevronDown,
+  CreditCard,
+  ReceiptText,
+  Repeat2,
+  Search,
+  SlidersHorizontal,
+  Tag,
+  Tags,
+  WalletCards,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +89,15 @@ type ActiveFilter = {
   onRemove: () => void;
 };
 
+function TransactionContextLine({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Icon aria-hidden="true" className="size-3.5 shrink-0 text-primary-strong" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
 function TransactionRow({
   transaction,
   accounts,
@@ -103,6 +126,18 @@ function TransactionRow({
     return postingAccount?.account_type === "credit_card";
   });
   const isInstallmentCharge = transaction.name.includes(" · Installment ");
+  const categoryIcon = isInstallmentCharge
+    ? ReceiptText
+    : split
+      ? Tags
+      : mode === "transfer"
+        ? ArrowLeftRight
+        : Tag;
+  const accountIcon = account?.account_type === "credit_card"
+    ? CreditCard
+    : account?.account_type === "cash"
+      ? WalletCards
+      : Building2;
   const currencyCode = accountPostings[0]?.currency_code ?? "PHP";
   const reconciliation = accountPostings.length === 0
     ? "—"
@@ -115,6 +150,14 @@ function TransactionRow({
     .map((posting) => posting.account_id ? accountById.get(posting.account_id)?.name : undefined)
     .filter(Boolean)
     .join(" → ");
+  const contextLabel = isInstallmentCharge
+    ? "Installment charge"
+    : split
+      ? `Split · ${categoryPostings.length} categories`
+      : mode === "transfer"
+        ? isCardPayment ? "Card payment" : transferLabel || "Transfer"
+        : category?.name ?? "No category";
+  const accountDisplayLabel = account ? accountLabel(account) : "Multiple accounts";
   const supportingText = [
     payee?.name,
     transaction.memo,
@@ -140,8 +183,10 @@ function TransactionRow({
           <span className="mt-1 block truncate text-xs text-muted-foreground">{supportingText || "No additional context"}</span>
         </span>
         <span className="min-w-0 text-xs text-muted-foreground">
-          <span className="block truncate">{isInstallmentCharge ? "Installment charge" : split ? `Split · ${categoryPostings.length} categories` : mode === "transfer" ? isCardPayment ? "Card payment" : transferLabel || "Transfer" : category?.name ?? "No category"}</span>
-          <span className="mt-1 block truncate">{account ? accountLabel(account) : "Multiple accounts"}</span>
+          <TransactionContextLine icon={categoryIcon} label={contextLabel} />
+          <span className="mt-1 block">
+            <TransactionContextLine icon={accountIcon} label={accountDisplayLabel} />
+          </span>
         </span>
         <span className="font-mono text-[0.65rem] uppercase tracking-[0.08em] text-muted-foreground">{reconciliation}</span>
         <span className={cn("font-mono text-sm font-medium sm:text-right", Number(transactionDisplayAmount(transaction)) > 0 ? "text-tag-sea-glass-foreground" : "text-foreground")}>

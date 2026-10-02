@@ -14,17 +14,18 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskPriority, TaskSeries, TaskSeriesUpdateInput, TaskStatus } from "../api";
 import type { Tag, TagColor } from "@/features/tags/api";
 import type { StoredFile } from "@/features/memory/files-api";
 import {
-  recurrenceFormError,
+  recurrenceFormValidationError,
   recurrenceValuesFromPayload,
   recurrenceValuesToPayload,
+  type RecurrenceFormErrorField,
   type RecurrenceFormValues,
 } from "../recurrence";
 import { priorityOption, statusOption, TASK_PRIORITIES, TASK_STATUSES } from "../utils";
@@ -86,29 +87,45 @@ export function TaskSeriesDialog({
 }: TaskSeriesDialogProps) {
   const [values, setValues] = useState<SeriesFormValues>(() => formValuesFromSeries(series));
   const [formError, setFormError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<"title" | "recurrence", string>>>({});
 
   function update<Key extends keyof SeriesFormValues>(key: Key, value: SeriesFormValues[Key]) {
     setValues((current) => ({ ...current, [key]: value }));
     setFormError(undefined);
+    setFieldErrors((current) => {
+      const next = { ...current };
+      if (key === "title") {
+        delete next.title;
+      }
+      if (key === "recurrence") {
+        delete next.recurrence;
+      }
+      return next;
+    });
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setFormError(undefined);
+    setFieldErrors({});
     const title = values.title.trim();
     if (!title) {
-      setFormError("Give this recurring task a short, specific title.");
+      setFieldErrors({ title: "Give this recurring task a short, specific title." });
       return;
     }
 
-    const recurrenceError = recurrenceFormError(values.recurrence, { date: "2000-01-01", time: "" });
-    if (recurrenceError) {
-      setFormError(recurrenceError);
+    const recurrenceValidation = recurrenceFormValidationError(values.recurrence, {
+      date: "2000-01-01",
+      time: "",
+    });
+    if (recurrenceValidation) {
+      setFieldErrors({ recurrence: recurrenceValidation.message });
       return;
     }
 
     const recurrence = recurrenceValuesToPayload(values.recurrence);
     if (!recurrence) {
-      setFormError("Keep recurrence enabled for a series edit.");
+      setFieldErrors({ recurrence: "Keep recurrence enabled for a series edit." });
       return;
     }
 
@@ -122,6 +139,12 @@ export function TaskSeriesDialog({
       recurrence,
     });
   }
+
+  const recurrenceValidation = recurrenceFormValidationError(values.recurrence, {
+    date: "2000-01-01",
+    time: "",
+  });
+  const recurrenceError = fieldErrors.recurrence ?? recurrenceValidation?.message;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,8 +162,7 @@ export function TaskSeriesDialog({
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-7">
             {formError ? <FieldError id="task-series-error" aria-live="polite" className="leading-6">{formError}</FieldError> : null}
 
-            <div>
-              <Label htmlFor="task-series-title" className="text-sm text-foreground">Title</Label>
+            <FormField id="task-series-title" label="Title" error={fieldErrors.title}>
               <Input
                 id="task-series-title"
                 value={values.title}
@@ -148,67 +170,66 @@ export function TaskSeriesDialog({
                 maxLength={200}
                 autoFocus
                 disabled={isSaving}
-                className="mt-2 min-h-11 bg-background"
+                aria-invalid={fieldErrors.title ? true : undefined}
+                aria-describedby={fieldDescribedBy("task-series-title", undefined, fieldErrors.title)}
+                className="min-h-11 bg-background"
               />
-            </div>
+            </FormField>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="task-series-status" className="text-sm text-foreground">Status</Label>
+              <FormField id="task-series-status" label="Status">
                 <Select value={values.status} onValueChange={(value) => update("status", value as TaskStatus)} disabled={isSaving}>
-                  <SelectTrigger id="task-series-status" className="mt-2 min-h-11 w-full bg-background">
+                  <SelectTrigger id="task-series-status" className="min-h-11 w-full bg-background">
                     <SelectValue><TaskOptionValue option={statusOption(values.status)} /></SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {TASK_STATUSES.map((option) => <SelectItem key={option.value} value={option.value}><TaskOptionValue option={option} /></SelectItem>)}
                   </SelectContent>
                 </Select>
-              </div>
-              <div>
-                <Label htmlFor="task-series-priority" className="text-sm text-foreground">Priority</Label>
+              </FormField>
+              <FormField id="task-series-priority" label="Priority">
                 <Select value={values.priority} onValueChange={(value) => update("priority", value as TaskPriority)} disabled={isSaving}>
-                  <SelectTrigger id="task-series-priority" className="mt-2 min-h-11 w-full bg-background">
+                  <SelectTrigger id="task-series-priority" className="min-h-11 w-full bg-background">
                     <SelectValue><TaskOptionValue option={priorityOption(values.priority)} /></SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {TASK_PRIORITIES.map((option) => <SelectItem key={option.value} value={option.value}><TaskOptionValue option={option} /></SelectItem>)}
                   </SelectContent>
                 </Select>
-              </div>
+              </FormField>
             </div>
 
-            <div>
-              <Label htmlFor="task-series-description" className="text-sm text-foreground">Description</Label>
+            <FormField id="task-series-description" label="Description">
               <Textarea
                 id="task-series-description"
                 value={values.description}
                 onChange={(event) => update("description", event.target.value)}
                 maxLength={10_000}
                 disabled={isSaving}
-                className="mt-2 min-h-28 resize-y bg-background leading-6"
+                className="min-h-28 resize-y bg-background leading-6"
               />
-            </div>
+            </FormField>
 
-            <div>
-              <Label htmlFor="task-series-tags" className="text-sm text-foreground">Tags</Label>
-              <div className="mt-2">
-                <TagPicker
-                  id="task-series-tags"
-                  tags={availableTags}
-                  value={values.tags}
-                  onChange={(tags) => update("tags", tags)}
-                  onCreateTag={onCreateTag}
-                  disabled={isSaving}
-                />
-              </div>
-            </div>
+            <FormField id="task-series-tags" label="Tags">
+              <TagPicker
+                id="task-series-tags"
+                tags={availableTags}
+                value={values.tags}
+                onChange={(tags) => update("tags", tags)}
+                onCreateTag={onCreateTag}
+                disabled={isSaving}
+              />
+            </FormField>
 
-            <FileAttachmentPicker
-              id="task-series-attachments"
-              value={values.attachments}
-              onChange={(attachments) => update("attachments", attachments)}
-              disabled={isSaving}
-            />
+            <FormField id="task-series-attachments" label="Attachments">
+              <FileAttachmentPicker
+                id="task-series-attachments"
+                value={values.attachments}
+                onChange={(attachments) => update("attachments", attachments)}
+                disabled={isSaving}
+                hideLabel
+              />
+            </FormField>
 
             <section className="rounded-lg border border-border/80 bg-background/35 p-4 sm:p-5" aria-labelledby="task-series-repeat-heading">
               <div>
@@ -222,6 +243,8 @@ export function TaskSeriesDialog({
                   disabled={isSaving}
                   showToggle={false}
                   idPrefix="task-series-recurrence"
+                  error={recurrenceError}
+                  errorField={recurrenceValidation?.field as RecurrenceFormErrorField | undefined}
                 />
               </div>
             </section>

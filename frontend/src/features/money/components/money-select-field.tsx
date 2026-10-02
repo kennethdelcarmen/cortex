@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Label } from "@/components/ui/label";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import {
   Select,
   SelectContent,
@@ -25,6 +25,8 @@ type MoneySelectFieldProps = {
   triggerClassName?: string;
   disabled?: boolean;
   size?: "default" | "compact";
+  hint?: string;
+  error?: string;
 };
 
 export function MoneySelectField({
@@ -39,18 +41,24 @@ export function MoneySelectField({
   triggerClassName,
   disabled,
   size = "default",
+  hint,
+  error,
 }: MoneySelectFieldProps) {
   const triggerSize = size === "compact" ? "h-10 min-h-10" : "h-11 min-h-11";
 
   return (
-    <div className={cn("flex min-w-0 flex-col gap-2 text-sm", className)}>
-      <Label htmlFor={id}>{label}</Label>
+    <FormField id={id} label={label} hint={hint} error={error} className={cn("min-w-0", className)}>
       <Select
         value={value || null}
         onValueChange={(nextValue) => onValueChange(!nextValue || nextValue === emptyValue ? "" : nextValue)}
         disabled={disabled}
       >
-        <SelectTrigger id={id} className={cn(triggerSize, "w-full bg-background", triggerClassName)}>
+        <SelectTrigger
+          id={id}
+          className={cn(triggerSize, "w-full bg-background", triggerClassName)}
+          aria-invalid={Boolean(error) || undefined}
+          aria-describedby={fieldDescribedBy(id, hint, error)}
+        >
           <SelectValue placeholder={emptyLabel}>{value ? selectedLabel ?? value : undefined}</SelectValue>
         </SelectTrigger>
         <SelectContent>
@@ -58,6 +66,6 @@ export function MoneySelectField({
           {children}
         </SelectContent>
       </Select>
-    </div>
+    </FormField>
   );
 }

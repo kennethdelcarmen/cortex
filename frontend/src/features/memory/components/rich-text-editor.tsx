@@ -43,6 +43,9 @@ type RichTextEditorProps = {
   initialHtml: string;
   readOnly: boolean;
   onHtmlChange: (html: string) => void;
+  id?: string;
+  invalid?: boolean;
+  describedBy?: string;
 };
 
 type ToolbarButtonProps = {
@@ -279,6 +282,9 @@ export function RichTextEditor({
   initialHtml,
   readOnly,
   onHtmlChange,
+  id,
+  invalid = false,
+  describedBy,
 }: RichTextEditorProps) {
   const initialContent = sanitizeNoteHtml(initialHtml) || "<p></p>";
   const onHtmlChangeRef = useRef(onHtmlChange);
@@ -313,6 +319,31 @@ export function RichTextEditor({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const editableElement = editor.view.dom;
+    if (id) {
+      editableElement.id = id;
+    } else {
+      editableElement.removeAttribute("id");
+    }
+
+    if (invalid) {
+      editableElement.setAttribute("aria-invalid", "true");
+    } else {
+      editableElement.removeAttribute("aria-invalid");
+    }
+
+    if (describedBy) {
+      editableElement.setAttribute("aria-describedby", describedBy);
+    } else {
+      editableElement.removeAttribute("aria-describedby");
+    }
+  }, [describedBy, editor, id, invalid]);
 
   if (!editor) {
     return <div className="memory-editor__loading" aria-hidden="true" />;

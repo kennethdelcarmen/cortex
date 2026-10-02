@@ -15,8 +15,9 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { Field, FieldError, FieldTitle } from "@/components/ui/field";
+import { fieldDescribedBy, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { SelectItem, SelectSeparator } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { currentLocalDateInput } from "@/lib/date";
@@ -61,6 +62,24 @@ type RecurringTransactionDrawerProps = {
 
 type RecurringEntryMode = "expense" | "income" | "transfer";
 type EndMode = "none" | "date" | "count";
+
+type RecurringErrorField =
+  | "name"
+  | "date"
+  | "account"
+  | "destination"
+  | "category"
+  | "amount"
+  | "timezone"
+  | "interval"
+  | "weekdays"
+  | "monthDay"
+  | "yearMonth"
+  | "yearDay"
+  | "untilDate"
+  | "occurrenceCount";
+
+type RecurringFieldErrors = Partial<Record<RecurringErrorField, string>>;
 
 const recurrenceWeekdays: Array<{ value: MoneyRecurrenceWeekday; label: string; short: string }> = [
   { value: "monday", label: "Monday", short: "M" },
@@ -267,7 +286,8 @@ export function RecurringTransactionDrawer({
   const [occurrenceCount, setOccurrenceCount] = useState("");
   const [timezone, setTimezone] = useState("UTC");
   const [editing, setEditing] = useState(!recurringTransactionId);
-  const [error, setError] = useState<string>();
+  const [formError, setFormError] = useState<string>();
+  const [fieldErrors, setFieldErrors] = useState<RecurringFieldErrors>({});
   const [resourceDialogKind, setResourceDialogKind] = useState<MoneyResourceKind | null>(null);
   const [resourceDialogDisplayKind, setResourceDialogDisplayKind] = useState<MoneyResourceKind>("payee");
   const [resourceName, setResourceName] = useState("");
@@ -304,7 +324,8 @@ export function RecurringTransactionDrawer({
 
     queueMicrotask(() => {
       if (cancelled) return;
-      setError(undefined);
+      setFormError(undefined);
+      setFieldErrors({});
       setResourceDialogKind(null);
       setResourceName("");
       setResourceError(undefined);
@@ -336,16 +357,15 @@ export function RecurringTransactionDrawer({
       }
       setEditing(true);
       const nextDate = defaultDate ?? currentLocalDateInput();
-      const firstExpenseCategory = categoriesForKind(categories, "expense")[0]?.id ?? "";
       setMode("expense");
       setDate(nextDate);
       setName("");
       setPayeeId("");
       setMemo("");
       setAmount("");
-      setAccountId(activeAccounts[0]?.id ?? "");
-      setDestinationAccountId(activeAccounts[1]?.id ?? "");
-      setCategoryId(firstExpenseCategory);
+      setAccountId("");
+      setDestinationAccountId("");
+      setCategoryId("");
       setFrequency("monthly");
       setInterval("1");
       setWeekdays([weekdayForDate(nextDate)]);
@@ -416,15 +436,18 @@ export function RecurringTransactionDrawer({
   function buildRecurrence(): MoneyRecurrenceInput | null {
     const parsedInterval = Number(interval);
     if (!timezone.trim()) {
-      setError("Enter a timezone such as Asia/Manila or UTC.");
+      setFieldErrors({ timezone: "Enter a timezone such as Asia/Manila or UTC." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-timezone")?.focus());
       return null;
     }
     if (!Number.isInteger(parsedInterval) || parsedInterval < 1 || parsedInterval > 365) {
-      setError("Choose an interval between 1 and 365.");
+      setFieldErrors({ interval: "Choose an interval between 1 and 365." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-interval")?.focus());
       return null;
     }
     if (frequency === "weekly" && !weekdays.length) {
-      setError("Choose at least one weekday for a weekly schedule.");
+      setFieldErrors({ weekdays: "Choose at least one weekday for a weekly schedule." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-weekday-monday")?.focus());
       return null;
     }
     const monthlyDay = Number(monthDay);
@@ -443,19 +466,26 @@ export function RecurringTransactionDrawer({
       occurrence_count: endMode === "count" ? requestedOccurrenceCount : null,
     };
     if (frequency === "monthly" && (!Number.isInteger(monthlyDay) || monthlyDay < 1 || monthlyDay > 31)) {
-      setError("Choose a monthly day between 1 and 31.");
+      setFieldErrors({ monthDay: "Choose a monthly day between 1 and 31." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-month-day")?.focus());
       return null;
     }
     if (frequency === "yearly" && (!Number.isInteger(yearlyMonth) || yearlyMonth < 1 || yearlyMonth > 12 || !Number.isInteger(yearlyDay) || yearlyDay < 1 || yearlyDay > 31)) {
-      setError("Choose a valid month and day for the yearly schedule.");
+      const nextErrors: RecurringFieldErrors = {};
+      if (!Number.isInteger(yearlyMonth) || yearlyMonth < 1 || yearlyMonth > 12) nextErrors.yearMonth = "Choose a valid month and day for the yearly schedule.";
+      if (!Number.isInteger(yearlyDay) || yearlyDay < 1 || yearlyDay > 31) nextErrors.yearDay = "Choose a valid month and day for the yearly schedule.";
+      setFieldErrors(nextErrors);
+      window.requestAnimationFrame(() => document.getElementById(nextErrors.yearMonth ? "recurring-year-month" : "recurring-year-day")?.focus());
       return null;
     }
     if (endMode === "date" && (!untilDate || untilDate < date)) {
-      setError("The end date must be on or after the start date.");
+      setFieldErrors({ untilDate: "The end date must be on or after the start date." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-until-date")?.focus());
       return null;
     }
     if (endMode === "count" && (!Number.isInteger(requestedOccurrenceCount) || requestedOccurrenceCount < 1 || requestedOccurrenceCount > 100000)) {
-      setError("Choose an occurrence count between 1 and 100,000.");
+      setFieldErrors({ occurrenceCount: "Choose an occurrence count between 1 and 100,000." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-occurrence-count")?.focus());
       return null;
     }
     return recurrence;
@@ -463,24 +493,47 @@ export function RecurringTransactionDrawer({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(undefined);
+    setFormError(undefined);
+    setFieldErrors({});
     const sourceAccount = activeAccounts.find((account) => account.id === accountId);
     const destinationAccount = activeAccounts.find((account) => account.id === destinationAccountId);
     const normalizedAmount = formatAmountInput(amount, sourceAccount?.currency_code ?? selectedCurrency);
-    if (!date || !name.trim() || !sourceAccount || !normalizedAmount) {
-      setError("Enter a name and start date, choose an account, and provide a positive amount before saving.");
+    const nextFieldErrors: RecurringFieldErrors = {};
+    if (!name.trim()) nextFieldErrors.name = "Enter a name before saving.";
+    if (!date) nextFieldErrors.date = "Choose a start date before saving.";
+    if (!sourceAccount) nextFieldErrors.account = "Choose an account before saving.";
+    if (!normalizedAmount) nextFieldErrors.amount = "Provide a positive amount before saving.";
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      const firstInvalidField = nextFieldErrors.name
+        ? "recurring-name"
+        : nextFieldErrors.date
+          ? "recurring-start-date"
+          : nextFieldErrors.account
+            ? "recurring-account"
+            : "recurring-amount";
+      window.requestAnimationFrame(() => document.getElementById(firstInvalidField)?.focus());
       return;
     }
-    if (mode === "transfer" && (!destinationAccount || destinationAccount.id === sourceAccount.id)) {
-      setError("Choose two different accounts for a transfer.");
+    if (!sourceAccount) return;
+    if (mode === "transfer" && !destinationAccount) {
+      setFieldErrors({ destination: "Choose a destination account before saving." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-destination")?.focus());
+      return;
+    }
+    if (mode === "transfer" && destinationAccount?.id === sourceAccount.id) {
+      setFieldErrors({ destination: "Choose a different destination account." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-destination")?.focus());
       return;
     }
     if (mode === "transfer" && destinationAccount?.currency_code !== sourceAccount.currency_code) {
-      setError("Transfers must stay within one currency.");
+      setFieldErrors({ destination: "Transfers must stay within one currency." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-destination")?.focus());
       return;
     }
     if (mode !== "transfer" && !categoryId) {
-      setError("Choose a category before saving.");
+      setFieldErrors({ category: "Choose a category before saving." });
+      window.requestAnimationFrame(() => document.getElementById("recurring-category")?.focus());
       return;
     }
     const recurrence = buildRecurrence();
@@ -527,8 +580,18 @@ export function RecurringTransactionDrawer({
       onSaved?.();
       onOpenChange(false);
     } catch (reason) {
-      setError(describeMoneyError(reason));
+      setFormError(describeMoneyError(reason));
     }
+  }
+
+  function clearFieldError(field: RecurringErrorField) {
+    setFormError(undefined);
+    setFieldErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
   }
 
   const title = recurringTransactionId ? (editing ? "Edit recurring schedule" : "Recurring schedule") : "Add recurring schedule";
@@ -564,7 +627,7 @@ export function RecurringTransactionDrawer({
           ) : readOnlySchedule ? (
             <ReadOnlyRecurringTemplate schedule={schedule} accounts={accounts} categories={categories} payees={payees} />
           ) : (
-            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+            <form onSubmit={handleSubmit} noValidate className="flex min-h-0 flex-1 flex-col" aria-describedby={formError ? "recurring-form-error" : undefined}>
               <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-6 sm:px-8">
                 <div className="grid grid-cols-3 gap-1 rounded-lg border border-border/80 bg-background p-1" role="group" aria-label="Recurring transaction type">
                   {(["expense", "income", "transfer"] as RecurringEntryMode[]).map((item) => (
@@ -577,6 +640,7 @@ export function RecurringTransactionDrawer({
                       onClick={() => {
                         setMode(item);
                         setCategoryId("");
+                        setFieldErrors({});
                       }}
                     >
                       {item[0].toUpperCase() + item.slice(1)}
@@ -585,21 +649,20 @@ export function RecurringTransactionDrawer({
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="flex flex-col gap-2 text-sm sm:col-span-2">
-                    <Label htmlFor="recurring-name">Schedule name</Label>
-                    <Input id="recurring-name" className="h-11" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Rent" maxLength={200} required />
-                  </div>
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="recurring-start-date">{recurringTransactionId ? "Starts" : "Start date"}</Label>
-                    <Input id="recurring-start-date" type="date" className="h-11" value={date} onChange={(event) => setDate(event.target.value)} disabled={Boolean(recurringTransactionId)} required />
-                  </div>
+                  <FormField id="recurring-name" label="Schedule name" error={fieldErrors.name} className="sm:col-span-2">
+                    <Input id="recurring-name" className="h-11" value={name} onChange={(event) => { setName(event.target.value); clearFieldError("name"); }} placeholder="e.g. Rent" maxLength={200} required aria-invalid={Boolean(fieldErrors.name) || undefined} aria-describedby={fieldDescribedBy("recurring-name", undefined, fieldErrors.name)} />
+                  </FormField>
+                  <FormField id="recurring-start-date" label={recurringTransactionId ? "Starts" : "Start date"} error={fieldErrors.date}>
+                    <Input id="recurring-start-date" type="date" className="h-11" value={date} onChange={(event) => { setDate(event.target.value); clearFieldError("date"); }} disabled={Boolean(recurringTransactionId)} required aria-invalid={Boolean(fieldErrors.date) || undefined} aria-describedby={fieldDescribedBy("recurring-start-date", undefined, fieldErrors.date)} />
+                  </FormField>
                   <MoneySelectField
                     id="recurring-account"
                     label={mode === "transfer" ? "From account" : "Account"}
                     value={accountId}
                     selectedLabel={selectedAccount ? `${accountLabel(selectedAccount)} · ${selectedAccount.currency_code}` : undefined}
                     emptyLabel="Choose an account"
-                    onValueChange={setAccountId}
+                    onValueChange={(value) => { setAccountId(value); clearFieldError("account"); }}
+                    error={fieldErrors.account}
                   >
                     {activeAccounts.map((account) => <SelectItem key={account.id} value={account.id}>{accountLabel(account)} · {account.currency_code}</SelectItem>)}
                   </MoneySelectField>
@@ -612,7 +675,8 @@ export function RecurringTransactionDrawer({
                     value={destinationAccountId}
                     selectedLabel={activeAccounts.find((account) => account.id === destinationAccountId)?.name}
                     emptyLabel="Choose a destination"
-                    onValueChange={setDestinationAccountId}
+                    onValueChange={(value) => { setDestinationAccountId(value); clearFieldError("destination"); }}
+                    error={fieldErrors.destination}
                   >
                     {activeAccounts.map((account) => <SelectItem key={account.id} value={account.id}>{accountLabel(account)} · {account.currency_code}</SelectItem>)}
                   </MoneySelectField>
@@ -623,7 +687,8 @@ export function RecurringTransactionDrawer({
                     value={categoryId}
                     selectedLabel={modeCategories.find((category) => category.id === categoryId)?.name ?? resourceLabels[categoryId]}
                     emptyLabel="Choose a category"
-                    onValueChange={(value) => handleResourceSelect("category", value)}
+                    onValueChange={(value) => { handleResourceSelect("category", value); clearFieldError("category"); }}
+                    error={fieldErrors.category}
                   >
                     {modeCategories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
                     <SelectSeparator />
@@ -631,10 +696,9 @@ export function RecurringTransactionDrawer({
                   </MoneySelectField>
                 )}
 
-                <div className="flex flex-col gap-2 text-sm">
-                  <Label htmlFor="recurring-amount">Amount · {selectedCurrency}</Label>
-                  <Input id="recurring-amount" className="h-11" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required />
-                </div>
+                <FormField id="recurring-amount" label={`Amount · ${selectedCurrency}`} error={fieldErrors.amount}>
+                  <Input id="recurring-amount" className="h-11" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => { setAmount(event.target.value); clearFieldError("amount"); }} required aria-invalid={Boolean(fieldErrors.amount) || undefined} aria-describedby={fieldDescribedBy("recurring-amount", undefined, fieldErrors.amount)} />
+                </FormField>
 
                 <section className="space-y-4 rounded-lg border border-border/70 bg-background/60 p-4" aria-labelledby="recurring-rule-title">
                   <div className="flex items-start gap-3">
@@ -647,80 +711,74 @@ export function RecurringTransactionDrawer({
                     </div>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <MoneySelectField id="recurring-frequency" label="Frequency" value={frequency} selectedLabel={frequency[0].toUpperCase() + frequency.slice(1)} onValueChange={(value) => setFrequency(value as MoneyRecurrenceFrequency)}>
+                    <MoneySelectField id="recurring-frequency" label="Frequency" value={frequency} selectedLabel={frequency[0].toUpperCase() + frequency.slice(1)} onValueChange={(value) => { setFrequency(value as MoneyRecurrenceFrequency); clearFieldError("weekdays"); clearFieldError("monthDay"); clearFieldError("yearMonth"); clearFieldError("yearDay"); }}>
                       <SelectItem value="weekly">Weekly</SelectItem>
                       <SelectItem value="monthly">Monthly</SelectItem>
                       <SelectItem value="yearly">Yearly</SelectItem>
                     </MoneySelectField>
-                    <div className="flex flex-col gap-2 text-sm">
-                      <Label htmlFor="recurring-interval">Repeat every</Label>
+                    <FormField id="recurring-interval" label="Repeat every" error={fieldErrors.interval}>
                       <div className="flex items-center gap-2">
-                        <Input id="recurring-interval" className="h-11" inputMode="numeric" value={interval} onChange={(event) => setInterval(event.target.value.replace(/\D/g, "").slice(0, 3))} />
+                        <Input id="recurring-interval" className="h-11" inputMode="numeric" value={interval} onChange={(event) => { setInterval(event.target.value.replace(/\D/g, "").slice(0, 3)); clearFieldError("interval"); }} aria-invalid={Boolean(fieldErrors.interval) || undefined} aria-describedby={fieldDescribedBy("recurring-interval", undefined, fieldErrors.interval)} />
                         <span className="shrink-0 text-sm text-muted-foreground">{frequency === "weekly" ? "week(s)" : frequency === "monthly" ? "month(s)" : "year(s)"}</span>
                       </div>
-                    </div>
+                    </FormField>
                   </div>
 
                   {frequency === "weekly" ? (
-                    <div className="space-y-2">
-                      <Label>Repeat on</Label>
+                    <Field data-invalid={fieldErrors.weekdays ? true : undefined} className="gap-1.5">
+                      <FieldTitle>Repeat on</FieldTitle>
                       <div className="flex flex-wrap gap-2">
                         {recurrenceWeekdays.map((day) => {
                           const checked = weekdays.includes(day.value);
                           return (
                             <label key={day.value} className={cn("flex min-h-10 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm transition-colors focus-within:ring-3 focus-within:ring-ring/40", checked ? "border-primary bg-primary/10" : "border-border bg-background hover:bg-muted/50")}>
-                              <Checkbox checked={checked} onCheckedChange={(value) => toggleWeekday(day.value, value === true)} aria-label={day.label} />
+                              <Checkbox id={`recurring-weekday-${day.value}`} checked={checked} onCheckedChange={(value) => { toggleWeekday(day.value, value === true); clearFieldError("weekdays"); }} aria-label={day.label} aria-invalid={Boolean(fieldErrors.weekdays) || undefined} aria-describedby={fieldErrors.weekdays ? "recurring-weekdays-error" : undefined} />
                               <span>{day.short}<span className="sr-only">{day.label}</span></span>
                             </label>
                           );
                         })}
                       </div>
-                    </div>
+                      {fieldErrors.weekdays ? <FieldError id="recurring-weekdays-error" aria-live="polite" className="text-xs leading-5">{fieldErrors.weekdays}</FieldError> : null}
+                    </Field>
                   ) : null}
 
                   {frequency === "monthly" ? (
-                    <div className="flex flex-col gap-2 text-sm">
-                      <Label htmlFor="recurring-month-day">Day of month</Label>
-                      <Input id="recurring-month-day" className="h-11" inputMode="numeric" value={monthDay} onChange={(event) => setMonthDay(event.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="1–31" />
-                    </div>
+                    <FormField id="recurring-month-day" label="Day of month" error={fieldErrors.monthDay}>
+                      <Input id="recurring-month-day" className="h-11" inputMode="numeric" value={monthDay} onChange={(event) => { setMonthDay(event.target.value.replace(/\D/g, "").slice(0, 2)); clearFieldError("monthDay"); }} placeholder="1–31" aria-invalid={Boolean(fieldErrors.monthDay) || undefined} aria-describedby={fieldDescribedBy("recurring-month-day", undefined, fieldErrors.monthDay)} />
+                    </FormField>
                   ) : null}
 
                   {frequency === "yearly" ? (
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <MoneySelectField id="recurring-year-month" label="Month" value={yearMonth} selectedLabel={yearMonth ? months[Number(yearMonth) - 1] : undefined} emptyLabel="Choose a month" onValueChange={setYearMonth}>
+                      <MoneySelectField id="recurring-year-month" label="Month" value={yearMonth} selectedLabel={yearMonth ? months[Number(yearMonth) - 1] : undefined} emptyLabel="Choose a month" onValueChange={(value) => { setYearMonth(value); clearFieldError("yearMonth"); }} error={fieldErrors.yearMonth}>
                         {months.map((month, index) => <SelectItem key={month} value={String(index + 1)}>{month}</SelectItem>)}
                       </MoneySelectField>
-                      <div className="flex flex-col gap-2 text-sm">
-                        <Label htmlFor="recurring-year-day">Day</Label>
-                        <Input id="recurring-year-day" className="h-11" inputMode="numeric" value={yearDay} onChange={(event) => setYearDay(event.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="1–31" />
-                      </div>
+                      <FormField id="recurring-year-day" label="Day" error={fieldErrors.yearDay}>
+                        <Input id="recurring-year-day" className="h-11" inputMode="numeric" value={yearDay} onChange={(event) => { setYearDay(event.target.value.replace(/\D/g, "").slice(0, 2)); clearFieldError("yearDay"); }} placeholder="1–31" aria-invalid={Boolean(fieldErrors.yearDay) || undefined} aria-describedby={fieldDescribedBy("recurring-year-day", undefined, fieldErrors.yearDay)} />
+                      </FormField>
                     </div>
                   ) : null}
 
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <MoneySelectField id="recurring-end-mode" label="Ends" value={endMode} selectedLabel={endMode === "none" ? "Never" : endMode === "date" ? "On a date" : "After occurrences"} onValueChange={(value) => setEndMode(value as EndMode)}>
+                    <MoneySelectField id="recurring-end-mode" label="Ends" value={endMode} selectedLabel={endMode === "none" ? "Never" : endMode === "date" ? "On a date" : "After occurrences"} onValueChange={(value) => { setEndMode(value as EndMode); clearFieldError("untilDate"); clearFieldError("occurrenceCount"); }}>
                       <SelectItem value="none">Never</SelectItem>
                       <SelectItem value="date">On a date</SelectItem>
                       <SelectItem value="count">After occurrences</SelectItem>
                     </MoneySelectField>
                     {endMode === "date" ? (
-                      <div className="flex flex-col gap-2 text-sm">
-                        <Label htmlFor="recurring-until-date">End date</Label>
-                        <Input id="recurring-until-date" type="date" className="h-11" value={untilDate} onChange={(event) => setUntilDate(event.target.value)} />
-                      </div>
+                      <FormField id="recurring-until-date" label="End date" error={fieldErrors.untilDate}>
+                        <Input id="recurring-until-date" type="date" className="h-11" value={untilDate} onChange={(event) => { setUntilDate(event.target.value); clearFieldError("untilDate"); }} aria-invalid={Boolean(fieldErrors.untilDate) || undefined} aria-describedby={fieldDescribedBy("recurring-until-date", undefined, fieldErrors.untilDate)} />
+                      </FormField>
                     ) : null}
                     {endMode === "count" ? (
-                      <div className="flex flex-col gap-2 text-sm">
-                        <Label htmlFor="recurring-occurrence-count">Occurrences</Label>
-                        <Input id="recurring-occurrence-count" className="h-11" inputMode="numeric" value={occurrenceCount} onChange={(event) => setOccurrenceCount(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="e.g. 12" />
-                      </div>
+                      <FormField id="recurring-occurrence-count" label="Occurrences" error={fieldErrors.occurrenceCount}>
+                        <Input id="recurring-occurrence-count" className="h-11" inputMode="numeric" value={occurrenceCount} onChange={(event) => { setOccurrenceCount(event.target.value.replace(/\D/g, "").slice(0, 6)); clearFieldError("occurrenceCount"); }} placeholder="e.g. 12" aria-invalid={Boolean(fieldErrors.occurrenceCount) || undefined} aria-describedby={fieldDescribedBy("recurring-occurrence-count", undefined, fieldErrors.occurrenceCount)} />
+                      </FormField>
                     ) : null}
                   </div>
-                  <div className="flex flex-col gap-2 text-sm">
-                    <Label htmlFor="recurring-timezone">Timezone</Label>
-                    <Input id="recurring-timezone" className="h-11" value={timezone} onChange={(event) => setTimezone(event.target.value)} placeholder="Asia/Manila" />
-                    <p className="text-xs leading-5 text-muted-foreground">Dates follow this IANA timezone, so local calendar days stay stable across daylight-saving changes.</p>
-                  </div>
+                  <FormField id="recurring-timezone" label="Timezone" hint="Dates follow this IANA timezone, so local calendar days stay stable across daylight-saving changes." error={fieldErrors.timezone}>
+                    <Input id="recurring-timezone" className="h-11" value={timezone} onChange={(event) => { setTimezone(event.target.value); clearFieldError("timezone"); }} placeholder="Asia/Manila" aria-invalid={Boolean(fieldErrors.timezone) || undefined} aria-describedby={fieldDescribedBy("recurring-timezone", "Dates follow this IANA timezone, so local calendar days stay stable across daylight-saving changes.", fieldErrors.timezone)} />
+                  </FormField>
                 </section>
 
                 <MoneySelectField
@@ -736,12 +794,11 @@ export function RecurringTransactionDrawer({
                   <SelectItem value="__create_payee__">Create new payee…</SelectItem>
                 </MoneySelectField>
 
-                <div className="flex flex-col gap-2 text-sm">
-                  <Label htmlFor="recurring-memo">Memo <span className="font-normal text-muted-foreground">Optional</span></Label>
+                <FormField id="recurring-memo" label={<>Memo <span className="font-normal text-muted-foreground">Optional</span></>}>
                   <Textarea id="recurring-memo" rows={3} placeholder="Add useful context" value={memo} onChange={(event) => setMemo(event.target.value)} />
-                </div>
+                </FormField>
 
-                {error ? <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{error}</p> : null}
+                {formError ? <FieldError id="recurring-form-error" aria-live="polite" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2">{formError}</FieldError> : null}
               </div>
               <DrawerFooter className="flex-row justify-end border-t border-border/70 bg-card px-6 py-4 sm:px-8">
                 <DrawerClose type="button" render={<Button variant="outline" disabled={pending} />}>Cancel</DrawerClose>

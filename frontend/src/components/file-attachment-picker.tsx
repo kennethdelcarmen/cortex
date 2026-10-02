@@ -62,12 +62,18 @@ export function FileAttachmentPicker({
   onChange,
   disabled = false,
   label = "Attachments",
+  invalid = false,
+  describedBy,
+  hideLabel = false,
 }: {
   id: string;
   value: StoredFile[];
   onChange: (files: StoredFile[]) => void;
   disabled?: boolean;
   label?: string;
+  invalid?: boolean;
+  describedBy?: string;
+  hideLabel?: boolean;
 }) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -138,12 +144,20 @@ export function FileAttachmentPicker({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3">
-        <Label htmlFor={id}>{label}</Label>
-        <span className="font-mono text-[0.64rem] uppercase tracking-[0.1em] text-muted-foreground">
-          {value.length}/{MAX_ATTACHMENTS}
-        </span>
-      </div>
+      {hideLabel ? (
+        <div className="flex justify-end">
+          <span className="font-mono text-[0.64rem] uppercase tracking-[0.1em] text-muted-foreground">
+            {value.length}/{MAX_ATTACHMENTS}
+          </span>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor={id}>{label}</Label>
+          <span className="font-mono text-[0.64rem] uppercase tracking-[0.1em] text-muted-foreground">
+            {value.length}/{MAX_ATTACHMENTS}
+          </span>
+        </div>
+      )}
       <div className="space-y-2">
         {value.length ? value.map((file) => (
           <div key={file.id} className="flex items-center gap-2 rounded-md border border-border/70 bg-background/50 px-3 py-2">
@@ -164,7 +178,16 @@ export function FileAttachmentPicker({
           <p className="rounded-md border border-dashed border-border/80 px-3 py-3 text-sm text-muted-foreground">No files attached yet.</p>
         )}
       </div>
-      <Button id={id} type="button" variant="outline" size="sm" onClick={openPicker} disabled={disabled || value.length >= MAX_ATTACHMENTS}>
+      <Button
+        id={id}
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={openPicker}
+        disabled={disabled || value.length >= MAX_ATTACHMENTS}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
+      >
         <Paperclip data-icon="inline-start" aria-hidden="true" />
         {value.length ? "Manage files" : "Add files"}
       </Button>
