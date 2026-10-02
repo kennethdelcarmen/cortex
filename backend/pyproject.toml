@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 cortex-embeddings-backfill = "cortex_backend.embeddings.backfill:main"
+cortex-money-rag-backfill = "cortex_backend.money.rag_backfill:main"
 
 [build-system]
 requires = ["hatchling>=1.25,<2.0"]

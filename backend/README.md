@@ -85,7 +85,12 @@ notes, materialized tasks, and extracted file text, plus an internal SQLite FTS5
 index. Migration `0019_content_chunk_embeddings` adds durable embedding-job
 state for those chunks. Chunk rows and pending embedding records are maintained
 transactionally by source writes and file processing; neither chunks nor
-embeddings have a public REST API.
+embeddings have a public REST API. Migration `0024_money_rag_sources` extends
+the same index with deterministic projections for accounts, payees, categories,
+budgets, transactions, recurring schedules, and installment plans. Money
+projections are owner-scoped and privacy-preserving: they include names,
+dates, currencies, amounts, schedules, balances, and statuses, but never
+`last_four`, raw identifiers, or other unnecessary account-number data.
 
 ## Optional local semantic retrieval
 
@@ -199,6 +204,36 @@ service:
 ```bash
 uv run alembic upgrade head
 ```
+
+After upgrading an existing database to `0024_money_rag_sources`, populate the
+money projections with the resumable, idempotent backfill:
+
+```bash
+uv run cortex-money-rag-backfill --batch-size 100
+# Or override the database path for a one-off run:
+uv run cortex-money-rag-backfill \
+  --database-path /var/lib/cortex/cortex.db \
+  --batch-size 100
+```
+
+The command processes accounts, payees, categories, budgets, transactions,
+recurring schedules, and installment plans in owner/id order, committing each
+batch. It is safe to rerun after interruption or after a partial deployment.
+Money writes synchronously replace their projection chunks and pending
+embedding jobs in the enclosing database transaction; vector generation stays
+asynchronous. `prepare_question` therefore sees fresh money context through
+the normal lexical or hybrid retrieval path, while money REST/MCP tools remain
+the authoritative interface for exact balances, budgets, aggregations, and
+mutations.
+
+Archived, voided, completed, and cancelled records remain searchable so
+historical context is not lost. Permanently deleted budgets remove their
+projection. If a projection fails, the enclosing money mutation fails and
+rolls back to avoid stale searchable data. To roll back application behavior,
+disable semantic retrieval or stop using money citations; the additive money
+chunks may remain safely. A schema downgrade must first remove money-derived
+chunks, embedding records, and optional vectors before restoring the previous
+`content_chunks.source_type` constraint.
 
 Money REST routes are under `/api/v1/money`. Transactions use exact decimal
 strings, calendar dates, and account/category postings that must balance to

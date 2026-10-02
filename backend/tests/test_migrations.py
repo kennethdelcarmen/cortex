@@ -499,7 +499,110 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0023_money_transaction_void_reasons",
+            "0024_money_rag_sources",
+        )
+
+
+def test_money_rag_migration_preserves_existing_content_chunks(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, revision="0023_money_transaction_void_reasons")
+
+    with sqlite3.connect(database_path) as connection:
+        timestamp = "2026-09-01 00:00:00"
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "user-1",
+                "owner@example.com",
+                "hash",
+                1,
+                1,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO content_chunks "
+            "(id, user_id, source_type, source_id, source_version, source_title, ordinal, "
+            "text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "chunk-note",
+                    "user-1",
+                    "note",
+                    "note-1",
+                    "version-1",
+                    "Note",
+                    0,
+                    "Existing note",
+                    timestamp,
+                    timestamp,
+                ),
+                (
+                    "chunk-task",
+                    "user-1",
+                    "task",
+                    "task-1",
+                    "version-1",
+                    "Task",
+                    0,
+                    "Existing task",
+                    timestamp,
+                    timestamp,
+                ),
+                (
+                    "chunk-file",
+                    "user-1",
+                    "file",
+                    "file-hash",
+                    "version-1",
+                    "File",
+                    0,
+                    "Existing file",
+                    timestamp,
+                    timestamp,
+                ),
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO content_chunks_fts (chunk_id, content) VALUES (?, ?)",
+            [
+                ("chunk-note", "Existing note"),
+                ("chunk-task", "Existing task"),
+                ("chunk-file", "Existing file"),
+            ],
+        )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT source_type, text FROM content_chunks ORDER BY source_type"
+        ).fetchall() == [
+            ("file", "Existing file"),
+            ("note", "Existing note"),
+            ("task", "Existing task"),
+        ]
+        connection.execute(
+            "INSERT INTO content_chunks "
+            "(id, user_id, source_type, source_id, source_version, source_title, ordinal, "
+            "text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "chunk-money",
+                "user-1",
+                "money_account",
+                "account-1",
+                "version-1",
+                "Account",
+                0,
+                "Money account",
+                "2026-09-01 00:00:00",
+                "2026-09-01 00:00:00",
+            ),
         )
 
 

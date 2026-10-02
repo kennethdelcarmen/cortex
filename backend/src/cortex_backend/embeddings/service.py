@@ -411,7 +411,20 @@ async def search_vectors(
     if not 1 <= limit <= 100:
         raise ValueError("invalid vector search limit")
     unique_types = tuple(dict.fromkeys(source_types))
-    invalid = set(unique_types).difference({"note", "task", "file"})
+    invalid = set(unique_types).difference(
+        {
+            "note",
+            "task",
+            "file",
+            "money_account",
+            "money_payee",
+            "money_category",
+            "money_budget",
+            "money_transaction",
+            "money_recurring",
+            "money_installment",
+        }
+    )
     if invalid:
         raise ValueError("invalid vector source type")
     source_clause = ""
@@ -444,7 +457,31 @@ async def search_vectors(
         "AND tasks.user_id = c.user_id AND tasks.deleted_at IS NULL)) "
         "OR (c.source_type = 'file' AND EXISTS ("
         "SELECT 1 FROM files WHERE files.sha256 = c.source_id "
-        "AND files.user_id = c.user_id AND files.deleted_at IS NULL)))"
+        "AND files.user_id = c.user_id AND files.deleted_at IS NULL))"
+        "OR (c.source_type IN ("
+        "'money_account', 'money_payee', 'money_category', 'money_budget', "
+        "'money_transaction', 'money_recurring', 'money_installment'"
+        ") AND EXISTS ("
+        "SELECT 1 FROM money_accounts WHERE money_accounts.id = c.source_id "
+        "AND c.source_type = 'money_account' AND money_accounts.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_payees WHERE money_payees.id = c.source_id "
+        "AND c.source_type = 'money_payee' AND money_payees.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_categories WHERE money_categories.id = c.source_id "
+        "AND c.source_type = 'money_category' AND money_categories.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_budgets WHERE money_budgets.id = c.source_id "
+        "AND c.source_type = 'money_budget' AND money_budgets.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_transactions WHERE money_transactions.id = c.source_id "
+        "AND c.source_type = 'money_transaction' AND money_transactions.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_recurring_transactions "
+        "WHERE money_recurring_transactions.id = c.source_id "
+        "AND c.source_type = 'money_recurring' "
+        "AND money_recurring_transactions.user_id = c.user_id "
+        "UNION ALL SELECT 1 FROM money_installment_plans "
+        "WHERE money_installment_plans.id = c.source_id "
+        "AND c.source_type = 'money_installment' "
+        "AND money_installment_plans.user_id = c.user_id"
+        "))"
+        ")"
         f"{source_clause}"
     )
     try:

@@ -17,11 +17,7 @@ def upgrade() -> None:
 
     connection = op.get_bind()
     connection.execute(
-        sa.text(
-            "UPDATE money_transactions "
-            "SET void_reason = 'reversal' "
-            "WHERE state = 'voided'"
-        )
+        sa.text("UPDATE money_transactions SET void_reason = 'reversal' WHERE state = 'voided'")
     )
 
     with op.batch_alter_table("money_transactions") as batch_op:

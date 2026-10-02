@@ -25,7 +25,11 @@ class ContentChunk(Base):
     __tablename__ = "content_chunks"
     __table_args__ = (
         CheckConstraint(
-            "source_type IN ('note', 'task', 'file')",
+            "source_type IN ("
+            "'note', 'task', 'file', 'money_account', 'money_payee', "
+            "'money_category', 'money_budget', 'money_transaction', "
+            "'money_recurring', 'money_installment'"
+            ")",
             name="ck_content_chunks_source_type",
         ),
         Index(
@@ -56,7 +60,7 @@ class ContentChunk(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_id: Mapped[str] = mapped_column(String(64), nullable=False)
     source_version: Mapped[str] = mapped_column(String(64), nullable=False)
     source_title: Mapped[str | None] = mapped_column(String(200), nullable=True)

@@ -69,6 +69,7 @@ from .models import (
     MoneyRecurringTransaction,
     MoneyTransaction,
 )
+from .rag import budget_ids_for_transactions, refresh_money_rag
 from .schemas import (
     SUPPORTED_CURRENCY_EXPONENTS,
     AccountCreateRequest,
@@ -1035,6 +1036,7 @@ async def create_account(
             )
             db.add(account)
             await db.flush()
+            await refresh_money_rag(db, user_id, account_ids=[account.id], now=now)
             return _account_record(account, _decimal(account.opening_balance))
 
 
@@ -1082,6 +1084,7 @@ async def update_account(
             if fields:
                 account.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, account_ids=[account.id], now=now)
             return _account_record(account, await _account_balance(db, account))
 
 
@@ -1094,6 +1097,7 @@ async def archive_account(storage: DatabaseStorage, user_id: str, account_id: st
                 account.archived_at = now
                 account.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, account_ids=[account.id], now=now)
             return _account_record(account, await _account_balance(db, account))
 
 
@@ -1106,6 +1110,7 @@ async def restore_account(storage: DatabaseStorage, user_id: str, account_id: st
                 account.archived_at = None
                 account.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, account_ids=[account.id], now=now)
             return _account_record(account, await _account_balance(db, account))
 
 
@@ -1160,6 +1165,7 @@ async def create_payee(
             )
             db.add(payee)
             await db.flush()
+            await refresh_money_rag(db, user_id, payee_ids=[payee.id], now=now)
             return _payee_record(payee)
 
 
@@ -1180,6 +1186,7 @@ async def update_payee(
                 payee.name = payload.name
                 payee.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, payee_ids=[payee.id], now=now)
             return _payee_record(payee)
 
 
@@ -1192,6 +1199,7 @@ async def archive_payee(storage: DatabaseStorage, user_id: str, payee_id: str) -
                 payee.archived_at = now
                 payee.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, payee_ids=[payee.id], now=now)
             return _payee_record(payee)
 
 
@@ -1204,6 +1212,7 @@ async def restore_payee(storage: DatabaseStorage, user_id: str, payee_id: str) -
                 payee.archived_at = None
                 payee.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, payee_ids=[payee.id], now=now)
             return _payee_record(payee)
 
 
@@ -1253,6 +1262,7 @@ async def create_category(
             )
             db.add(category)
             await db.flush()
+            await refresh_money_rag(db, user_id, category_ids=[category.id], now=now)
             return _category_record(category)
 
 
@@ -1276,6 +1286,7 @@ async def update_category(
                 category.name = payload.name
                 category.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, category_ids=[category.id], now=now)
             return _category_record(category)
 
 
@@ -1290,6 +1301,7 @@ async def archive_category(
                 category.archived_at = now
                 category.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, category_ids=[category.id], now=now)
             return _category_record(category)
 
 
@@ -1304,6 +1316,7 @@ async def restore_category(
                 category.archived_at = None
                 category.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, category_ids=[category.id], now=now)
             return _category_record(category)
 
 
@@ -1405,6 +1418,7 @@ async def upsert_budget(
                 budget.amount = amount
                 budget.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, budget_ids=[budget.id], now=now)
             return await _budget_record(db, budget)
 
 
@@ -1418,6 +1432,8 @@ async def delete_budget(storage: DatabaseStorage, user_id: str, budget_id: str) 
         async with db.begin():
             budget = await _get_budget(db, user_id, budget_id)
             await db.delete(budget)
+            await db.flush()
+            await refresh_money_rag(db, user_id, budget_ids=[budget.id])
 
 
 async def list_budgets(
@@ -1571,6 +1587,7 @@ async def create_transaction(
     async with storage.session() as db:
         async with db.begin():
             transaction, postings = await _create_transaction_in_session(db, user_id, payload, now)
+            await refresh_money_rag(db, user_id, transaction_ids=[transaction.id], now=now)
             return _transaction_record(transaction, postings)
 
 
@@ -1781,6 +1798,12 @@ async def create_recurring_transaction(
             await _create_recurring_occurrence(
                 db, schedule, first.occurrence_date, first.sequence_number
             )
+            await refresh_money_rag(
+                db,
+                user_id,
+                recurring_ids=[schedule.id],
+                now=now,
+            )
             return await _recurring_transaction_record(db, schedule)
 
 
@@ -1864,6 +1887,23 @@ async def update_recurring_transaction(
             schedule = await _get_recurring_transaction(db, user_id, recurring_transaction_id)
             if schedule.state == MoneyRecurrenceState.ENDED.value:
                 raise RecurringTransactionStateError()
+            current_postings = list(
+                (
+                    await db.scalars(
+                        select(MoneyRecurringPosting).where(
+                            MoneyRecurringPosting.recurring_transaction_id == schedule.id
+                        )
+                    )
+                ).all()
+            )
+            old_account_ids = [
+                posting.account_id for posting in current_postings if posting.account_id is not None
+            ]
+            old_category_ids = [
+                posting.category_id
+                for posting in current_postings
+                if posting.category_id is not None
+            ]
             values = payload.model_dump(exclude_unset=True)
             if payload.recurrence is not None:
                 try:
@@ -1943,6 +1983,14 @@ async def update_recurring_transaction(
                 )
             schedule.updated_at = now
             await db.flush()
+            await refresh_money_rag(
+                db,
+                user_id,
+                account_ids=old_account_ids,
+                category_ids=old_category_ids,
+                recurring_ids=[schedule.id],
+                now=now,
+            )
             return await _recurring_transaction_record(db, schedule)
 
 
@@ -1959,6 +2007,7 @@ async def pause_recurring_transaction(
             schedule.paused_at = now
             schedule.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, recurring_ids=[schedule.id], now=now)
             return await _recurring_transaction_record(db, schedule)
 
 
@@ -1999,6 +2048,7 @@ async def resume_recurring_transaction(
                 schedule.paused_at = None
                 schedule.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, recurring_ids=[schedule.id], now=now)
             return await _recurring_transaction_record(db, schedule)
 
 
@@ -2032,6 +2082,7 @@ async def end_recurring_transaction(
             schedule.ended_at = now
             schedule.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, recurring_ids=[schedule.id], now=now)
             return await _recurring_transaction_record(db, schedule)
 
 
@@ -2063,6 +2114,7 @@ async def _process_one_recurring_occurrence(
             if occurrence.status != RecurringOccurrenceState.SCHEDULED.value:
                 _set_next_recurring_candidate(schedule, due_date, now)
                 await db.flush()
+                await refresh_money_rag(db, user_id, recurring_ids=[schedule.id], now=now)
                 return False
             postings = await _recurring_posting_requests(db, schedule.id)
             transaction_payload = TransactionCreateRequest(
@@ -2086,6 +2138,13 @@ async def _process_one_recurring_occurrence(
             await _ensure_next_recurring_occurrence(db, schedule)
             schedule.updated_at = now
             await db.flush()
+            await refresh_money_rag(
+                db,
+                user_id,
+                transaction_ids=[transaction.id],
+                recurring_ids=[schedule.id],
+                now=now,
+            )
             return True
 
 
@@ -2149,6 +2208,15 @@ async def update_transaction(
             if transaction.state == "voided":
                 raise TransactionVoidedError()
             current_postings = await _postings_for_transaction(db, transaction.id)
+            old_account_ids = [
+                posting.account_id for posting in current_postings if posting.account_id is not None
+            ]
+            old_category_ids = [
+                posting.category_id
+                for posting in current_postings
+                if posting.category_id is not None
+            ]
+            old_budget_ids = await budget_ids_for_transactions(db, user_id, [transaction.id])
             if any(
                 posting.reconciliation_state == ReconciliationState.RECONCILED.value
                 for posting in current_postings
@@ -2183,6 +2251,15 @@ async def update_transaction(
             if fields:
                 transaction.updated_at = now
             await db.flush()
+            await refresh_money_rag(
+                db,
+                user_id,
+                account_ids=old_account_ids,
+                category_ids=old_category_ids,
+                budget_ids=old_budget_ids,
+                transaction_ids=[transaction.id],
+                now=now,
+            )
             return _transaction_record(
                 transaction, await _postings_for_transaction(db, transaction.id)
             )
@@ -2213,6 +2290,7 @@ async def void_transaction(
             transaction.void_reason = TransactionVoidReason.MANUAL.value
             transaction.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, transaction_ids=[transaction.id], now=now)
             return _transaction_record(transaction, postings)
 
 
@@ -2235,6 +2313,7 @@ async def restore_transaction(
             transaction.void_reason = None
             transaction.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, transaction_ids=[transaction.id], now=now)
             return _transaction_record(
                 transaction, await _postings_for_transaction(db, transaction.id)
             )
@@ -2405,6 +2484,7 @@ async def clear_posting(
             posting.cleared_at = now
             transaction.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, transaction_ids=[transaction.id], now=now)
             return _transaction_record(
                 transaction, await _postings_for_transaction(db, transaction.id)
             )
@@ -2432,6 +2512,7 @@ async def reconcile_posting(
             posting.reconciled_at = now
             transaction.updated_at = now
             await db.flush()
+            await refresh_money_rag(db, user_id, transaction_ids=[transaction.id], now=now)
             return _transaction_record(
                 transaction, await _postings_for_transaction(db, transaction.id)
             )
@@ -2457,6 +2538,16 @@ async def reverse_transaction(
                 for posting in original_postings
             ):
                 raise ReversalNotAllowedError()
+            affected_account_ids = [
+                posting.account_id
+                for posting in original_postings
+                if posting.account_id is not None
+            ]
+            affected_category_ids = [
+                posting.category_id
+                for posting in original_postings
+                if posting.category_id is not None
+            ]
             reversal = MoneyTransaction(
                 id=str(uuid4()),
                 user_id=user_id,
@@ -2493,6 +2584,14 @@ async def reverse_transaction(
                 )
             db.add_all(reversal_postings)
             await db.flush()
+            await refresh_money_rag(
+                db,
+                user_id,
+                account_ids=affected_account_ids,
+                category_ids=affected_category_ids,
+                transaction_ids=[original.id, reversal.id],
+                now=now,
+            )
             return _transaction_record(reversal, reversal_postings)
 
 
@@ -2590,6 +2689,7 @@ async def create_installment_plan(
             ]
             db.add_all(occurrences)
             await db.flush()
+            await refresh_money_rag(db, user_id, installment_ids=[plan.id], now=now)
             return await _installment_plan_record(db, plan)
 
 
@@ -2677,6 +2777,7 @@ async def cancel_installment_plan(
                 plan.status = InstallmentPlanState.CANCELLED.value
                 plan.updated_at = now
                 await db.flush()
+                await refresh_money_rag(db, user_id, installment_ids=[plan.id], now=now)
             return await _installment_plan_record(db, plan)
 
 
@@ -2688,6 +2789,8 @@ async def process_due_installments(
     charge_date = today or datetime.now(UTC).date()
     now = _utc_now()
     processed = 0
+    changed_plans: dict[str, set[str]] = defaultdict(set)
+    created_transactions: dict[str, set[str]] = defaultdict(set)
     async with storage.session() as db:
         async with db.begin():
             statement = (
@@ -2716,6 +2819,8 @@ async def process_due_installments(
                 )
                 if plan is None or plan.status != InstallmentPlanState.ACTIVE.value:
                     occurrence.status = InstallmentOccurrenceState.CANCELLED.value
+                    if plan is not None:
+                        changed_plans[occurrence.user_id].add(occurrence.plan_id)
                     continue
                 account = await db.scalar(
                     select(MoneyAccount).where(MoneyAccount.id == plan.account_id).limit(1)
@@ -2773,6 +2878,8 @@ async def process_due_installments(
                 occurrence.transaction_id = transaction_id
                 occurrence.charged_at = now
                 plan.updated_at = now
+                changed_plans[plan.user_id].add(plan.id)
+                created_transactions[plan.user_id].add(transaction_id)
                 processed += 1
                 remaining = await db.scalar(
                     select(func.count(MoneyInstallmentOccurrence.id)).where(
@@ -2784,4 +2891,12 @@ async def process_due_installments(
                 if remaining == 0:
                     plan.status = InstallmentPlanState.COMPLETED.value
             await db.flush()
+            for owner_id, plan_ids in changed_plans.items():
+                await refresh_money_rag(
+                    db,
+                    owner_id,
+                    installment_ids=tuple(plan_ids),
+                    transaction_ids=tuple(created_transactions[owner_id]),
+                    now=now,
+                )
     return processed
