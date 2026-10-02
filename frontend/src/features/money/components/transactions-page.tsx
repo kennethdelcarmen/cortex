@@ -43,6 +43,7 @@ import {
   describeMoneyError,
   formatMoney,
   formatSignedMoney,
+  isSplitTransaction,
   periodLabel,
   periodOptions,
   periodRange,
@@ -91,8 +92,10 @@ function TransactionRow({
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const payee = payees.find((item) => item.id === transaction.payee_id);
   const accountPostings = transactionAccountPostings(transaction);
-  const categoryPosting = transactionCategoryPostings(transaction)[0];
+  const categoryPostings = transactionCategoryPostings(transaction);
+  const categoryPosting = categoryPostings[0];
   const mode = transactionMode(transaction, categories);
+  const split = isSplitTransaction(transaction);
   const account = accountPostings[0]?.account_id ? accountById.get(accountPostings[0].account_id) : undefined;
   const category = categoryPosting?.category_id ? categoryById.get(categoryPosting.category_id) : undefined;
   const isCardPayment = mode === "transfer" && accountPostings.some((posting) => {
@@ -117,6 +120,8 @@ function TransactionRow({
     transaction.memo,
     isInstallmentCharge
       ? "Installment charge"
+      : split
+        ? `Split · ${categoryPostings.length} categories`
       : mode === "transfer"
         ? isCardPayment ? "Card payment" : transferLabel || "Account transfer"
         : category?.name ?? "Uncategorized",
@@ -135,7 +140,7 @@ function TransactionRow({
           <span className="mt-1 block truncate text-xs text-muted-foreground">{supportingText || "No additional context"}</span>
         </span>
         <span className="min-w-0 text-xs text-muted-foreground">
-          <span className="block truncate">{isInstallmentCharge ? "Installment charge" : mode === "transfer" ? isCardPayment ? "Card payment" : transferLabel || "Transfer" : category?.name ?? "No category"}</span>
+          <span className="block truncate">{isInstallmentCharge ? "Installment charge" : split ? `Split · ${categoryPostings.length} categories` : mode === "transfer" ? isCardPayment ? "Card payment" : transferLabel || "Transfer" : category?.name ?? "No category"}</span>
           <span className="mt-1 block truncate">{account ? accountLabel(account) : "Multiple accounts"}</span>
         </span>
         <span className="font-mono text-[0.65rem] uppercase tracking-[0.08em] text-muted-foreground">{reconciliation}</span>

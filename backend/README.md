@@ -204,8 +204,9 @@ Money REST routes are under `/api/v1/money`. Transactions use exact decimal
 strings, calendar dates, and account/category postings that must balance to
 zero independently for each supported currency. Account balances and budget
 spending are calculated from the posting ledger; credentials and full account
-numbers are never stored. Reconciled postings are immutable and corrected with
-the transaction reversal action. Credit-card accounts also store a credit limit,
+numbers are never stored. Unreconciled standalone transactions can be manually
+voided and restored; reconciled postings are immutable and corrected with the
+transaction reversal action. Credit-card accounts also store a credit limit,
 statement closing day, and payment due day; their amount owed and available
 credit are derived from the signed posting balance. Migration
 `0020_credit_card_installments` adds installment purchase plans and scheduled
@@ -218,6 +219,15 @@ be cancelled without reversing historical charges. Configure the worker with
 `CORTEX_INSTALLMENT_CHARGING_ENABLED` and
 `CORTEX_INSTALLMENT_CHARGING_POLL_SECONDS`. Matching authenticated MCP tools use
 the same service functions as REST.
+
+Migration `0022_money_transaction_splits` adds ordered transaction postings and
+optional posting labels. A split transaction uses the existing transaction
+endpoints with one account posting and at least two category postings in one
+currency; category postings must share a direction, balance the account
+posting, and include a label. Posting positions are assigned from the request
+array and returned with transaction responses. Existing recurring transaction
+templates retain their current posting contract. Downgrading this migration
+discards the added labels and posting order metadata.
 
 Migration `0021_money_recurring_transactions` adds fixed posting templates for
 weekly, monthly, and yearly recurring transactions. Rules use an IANA timezone,

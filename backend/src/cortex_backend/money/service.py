@@ -8,6 +8,7 @@ import calendar
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_DOWN, Decimal
@@ -38,8 +39,10 @@ from .errors import (
     InvalidMoneyCursorError,
     InvalidMoneyQueryError,
     InvalidPostingTargetError,
+    InvalidReconciliationTargetError,
     InvalidReconciliationTransitionError,
     InvalidRecurringTransactionError,
+    InvalidSplitTransactionError,
     PayeeNotFoundError,
     PostingNotFoundError,
     RecurringTransactionNotFoundError,
@@ -47,8 +50,10 @@ from .errors import (
     ReversalNotAllowedError,
     TransactionLockedError,
     TransactionNotFoundError,
+    TransactionRestoreNotAllowedError,
     TransactionTooSmallError,
     TransactionVoidedError,
+    TransactionVoidNotAllowedError,
     UnbalancedTransactionError,
 )
 from .models import (
@@ -87,9 +92,11 @@ from .schemas import (
     RecurringTransactionCreateRequest,
     RecurringTransactionUpdateRequest,
     TransactionCreateRequest,
+    TransactionPostingRequest,
     TransactionReverseRequest,
     TransactionState,
     TransactionUpdateRequest,
+    TransactionVoidReason,
     canonical_amount,
     normalize_currency,
     normalize_name,
@@ -168,6 +175,8 @@ class MoneySummaryRecord:
 @dataclass(frozen=True)
 class PostingRecord:
     id: str
+    position: int
+    label: str | None
     account_id: str | None
     category_id: str | None
     currency_code: str
@@ -190,6 +199,7 @@ class TransactionRecord:
     created_at: datetime
     updated_at: datetime
     voided_at: datetime | None
+    void_reason: TransactionVoidReason | None
 
 
 @dataclass(frozen=True)
@@ -571,6 +581,8 @@ def _category_record(category: MoneyCategory) -> CategoryRecord:
 def _posting_record(posting: MoneyPosting) -> PostingRecord:
     return PostingRecord(
         id=posting.id,
+        position=posting.position,
+        label=posting.label,
         account_id=posting.account_id,
         category_id=posting.category_id,
         currency_code=posting.currency_code,
@@ -597,6 +609,11 @@ def _transaction_record(
         created_at=_as_utc(transaction.created_at) or transaction.created_at,
         updated_at=_as_utc(transaction.updated_at) or transaction.updated_at,
         voided_at=_as_utc(transaction.voided_at),
+        void_reason=(
+            TransactionVoidReason(transaction.void_reason)
+            if transaction.void_reason is not None
+            else None
+        ),
     )
 
 
@@ -941,6 +958,16 @@ async def _get_transaction(db: AsyncSession, user_id: str, transaction_id: str) 
     return transaction
 
 
+async def _has_reversal(db: AsyncSession, transaction_id: str) -> bool:
+    return (
+        await db.scalar(
+            select(MoneyTransaction.id)
+            .where(MoneyTransaction.reversal_of_id == transaction_id)
+            .limit(1)
+        )
+    ) is not None
+
+
 async def _get_recurring_transaction(
     db: AsyncSession, user_id: str, recurring_transaction_id: str
 ) -> MoneyRecurringTransaction:
@@ -961,7 +988,7 @@ async def _postings_for_transaction(db: AsyncSession, transaction_id: str) -> li
     result = await db.execute(
         select(MoneyPosting)
         .where(MoneyPosting.transaction_id == transaction_id)
-        .order_by(MoneyPosting.id.asc())
+        .order_by(MoneyPosting.position.asc(), MoneyPosting.id.asc())
     )
     return list(result.scalars().all())
 
@@ -1438,7 +1465,9 @@ async def list_budgets(
 async def _validate_postings(
     db: AsyncSession,
     user_id: str,
-    postings: list[PostingRequest],
+    postings: Sequence[PostingRequest],
+    *,
+    require_split_labels: bool = False,
 ) -> None:
     if len(postings) < 2:
         raise TransactionTooSmallError()
@@ -1456,16 +1485,33 @@ async def _validate_postings(
     if any(total != 0 for total in totals.values()):
         raise UnbalancedTransactionError()
 
+    account_postings = [posting for posting in postings if posting.account_id is not None]
+    category_postings = [posting for posting in postings if posting.category_id is not None]
+    if not require_split_labels or len(account_postings) != 1 or len(category_postings) < 2:
+        return
+
+    if len({posting.currency_code for posting in postings}) != 1:
+        raise InvalidSplitTransactionError()
+
+    account_amount = _decimal(account_postings[0].amount)
+    if any((account_amount > 0) == (_decimal(posting.amount) > 0) for posting in category_postings):
+        raise InvalidSplitTransactionError()
+    if any(getattr(posting, "label", None) is None for posting in category_postings):
+        raise InvalidSplitTransactionError()
+
 
 def _posting_from_request(
     user_id: str,
     transaction_id: str,
-    request: PostingRequest,
+    request: TransactionPostingRequest,
+    position: int,
 ) -> MoneyPosting:
     return MoneyPosting(
         id=str(uuid4()),
         user_id=user_id,
         transaction_id=transaction_id,
+        position=position,
+        label=request.label,
         account_id=request.account_id,
         category_id=request.category_id,
         currency_code=request.currency_code,
@@ -1484,9 +1530,16 @@ async def _create_transaction_in_session(
     user_id: str,
     payload: TransactionCreateRequest,
     now: datetime,
+    *,
+    require_split_labels: bool = True,
 ) -> tuple[MoneyTransaction, list[MoneyPosting]]:
     await _validate_payee(db, user_id, payload.payee_id)
-    await _validate_postings(db, user_id, payload.postings)
+    await _validate_postings(
+        db,
+        user_id,
+        payload.postings,
+        require_split_labels=require_split_labels,
+    )
     transaction = MoneyTransaction(
         id=str(uuid4()),
         user_id=user_id,
@@ -1501,7 +1554,8 @@ async def _create_transaction_in_session(
     db.add(transaction)
     await db.flush()
     postings = [
-        _posting_from_request(user_id, transaction.id, posting) for posting in payload.postings
+        _posting_from_request(user_id, transaction.id, posting, position)
+        for position, posting in enumerate(payload.postings)
     ]
     db.add_all(postings)
     await db.flush()
@@ -1608,7 +1662,9 @@ def _set_next_recurring_candidate(
     schedule.next_occurrence_number = candidate.sequence_number
 
 
-async def _recurring_posting_requests(db: AsyncSession, schedule_id: str) -> list[PostingRequest]:
+async def _recurring_posting_requests(
+    db: AsyncSession, schedule_id: str
+) -> list[TransactionPostingRequest]:
     rows = list(
         (
             await db.execute(
@@ -1621,7 +1677,7 @@ async def _recurring_posting_requests(db: AsyncSession, schedule_id: str) -> lis
         .all()
     )
     return [
-        PostingRequest(
+        TransactionPostingRequest(
             account_id=row.account_id,
             category_id=row.category_id,
             currency_code=row.currency_code,
@@ -2017,7 +2073,11 @@ async def _process_one_recurring_occurrence(
                 postings=postings,
             )
             transaction, _ = await _create_transaction_in_session(
-                db, user_id, transaction_payload, now
+                db,
+                user_id,
+                transaction_payload,
+                now,
+                require_split_labels=False,
             )
             occurrence.status = RecurringOccurrenceState.POSTED.value
             occurrence.transaction_id = transaction.id
@@ -2105,18 +2165,75 @@ async def update_transaction(
             if "memo" in fields:
                 transaction.memo = payload.memo
             if "postings" in fields and payload.postings is not None:
-                await _validate_postings(db, user_id, payload.postings)
+                await _validate_postings(
+                    db,
+                    user_id,
+                    payload.postings,
+                    require_split_labels=True,
+                )
                 await db.execute(
                     delete(MoneyPosting).where(MoneyPosting.transaction_id == transaction.id)
                 )
                 db.add_all(
                     [
-                        _posting_from_request(user_id, transaction.id, posting)
-                        for posting in payload.postings
+                        _posting_from_request(user_id, transaction.id, posting, position)
+                        for position, posting in enumerate(payload.postings)
                     ]
                 )
             if fields:
                 transaction.updated_at = now
+            await db.flush()
+            return _transaction_record(
+                transaction, await _postings_for_transaction(db, transaction.id)
+            )
+
+
+async def void_transaction(
+    storage: DatabaseStorage, user_id: str, transaction_id: str
+) -> TransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            transaction = await _get_transaction(db, user_id, transaction_id)
+            if transaction.state == TransactionState.VOIDED.value:
+                raise TransactionVoidedError()
+            postings = await _postings_for_transaction(db, transaction.id)
+            if (
+                transaction.reversal_of_id is not None
+                or await _has_reversal(db, transaction.id)
+                or any(
+                    posting.account_id is not None
+                    and posting.reconciliation_state == ReconciliationState.RECONCILED.value
+                    for posting in postings
+                )
+            ):
+                raise TransactionVoidNotAllowedError()
+            transaction.state = TransactionState.VOIDED.value
+            transaction.voided_at = now
+            transaction.void_reason = TransactionVoidReason.MANUAL.value
+            transaction.updated_at = now
+            await db.flush()
+            return _transaction_record(transaction, postings)
+
+
+async def restore_transaction(
+    storage: DatabaseStorage, user_id: str, transaction_id: str
+) -> TransactionRecord:
+    now = _utc_now()
+    async with storage.session() as db:
+        async with db.begin():
+            transaction = await _get_transaction(db, user_id, transaction_id)
+            if (
+                transaction.state != TransactionState.VOIDED.value
+                or transaction.void_reason != TransactionVoidReason.MANUAL.value
+                or transaction.reversal_of_id is not None
+                or await _has_reversal(db, transaction.id)
+            ):
+                raise TransactionRestoreNotAllowedError()
+            transaction.state = TransactionState.POSTED.value
+            transaction.voided_at = None
+            transaction.void_reason = None
+            transaction.updated_at = now
             await db.flush()
             return _transaction_record(
                 transaction, await _postings_for_transaction(db, transaction.id)
@@ -2202,7 +2319,8 @@ async def list_transactions(
         if filters.reconciliation_state is not None:
             statement = statement.where(
                 posting_exists.where(
-                    MoneyPosting.reconciliation_state == filters.reconciliation_state.value
+                    MoneyPosting.account_id.is_not(None),
+                    MoneyPosting.reconciliation_state == filters.reconciliation_state.value,
                 )
             )
         if filters.cursor:
@@ -2279,6 +2397,8 @@ async def clear_posting(
             )
             if transaction.state == "voided":
                 raise TransactionVoidedError()
+            if posting.account_id is None:
+                raise InvalidReconciliationTargetError()
             if posting.reconciliation_state != ReconciliationState.UNCLEARED.value:
                 raise InvalidReconciliationTransitionError()
             posting.reconciliation_state = ReconciliationState.CLEARED.value
@@ -2304,6 +2424,8 @@ async def reconcile_posting(
             )
             if transaction.state == "voided":
                 raise TransactionVoidedError()
+            if posting.account_id is None:
+                raise InvalidReconciliationTargetError()
             if posting.reconciliation_state != ReconciliationState.CLEARED.value:
                 raise InvalidReconciliationTransitionError()
             posting.reconciliation_state = ReconciliationState.RECONCILED.value
@@ -2330,7 +2452,8 @@ async def reverse_transaction(
                 raise TransactionVoidedError()
             original_postings = await _postings_for_transaction(db, original.id)
             if not any(
-                posting.reconciliation_state == ReconciliationState.RECONCILED.value
+                posting.account_id is not None
+                and posting.reconciliation_state == ReconciliationState.RECONCILED.value
                 for posting in original_postings
             ):
                 raise ReversalNotAllowedError()
@@ -2349,6 +2472,7 @@ async def reverse_transaction(
             db.add(reversal)
             original.state = "voided"
             original.voided_at = now
+            original.void_reason = TransactionVoidReason.REVERSAL.value
             original.updated_at = now
             await db.flush()
             reversal_postings = []
@@ -2358,6 +2482,8 @@ async def reverse_transaction(
                         id=str(uuid4()),
                         user_id=user_id,
                         transaction_id=reversal.id,
+                        position=posting.position,
+                        label=posting.label,
                         account_id=posting.account_id,
                         category_id=posting.category_id,
                         currency_code=posting.currency_code,
@@ -2621,6 +2747,8 @@ async def process_due_installments(
                             id=str(uuid4()),
                             user_id=plan.user_id,
                             transaction_id=transaction_id,
+                            position=0,
+                            label=None,
                             account_id=account.id,
                             category_id=None,
                             currency_code=plan.currency_code,
@@ -2631,6 +2759,8 @@ async def process_due_installments(
                             id=str(uuid4()),
                             user_id=plan.user_id,
                             transaction_id=transaction_id,
+                            position=1,
+                            label=None,
                             account_id=None,
                             category_id=plan.category_id,
                             currency_code=plan.currency_code,

@@ -320,11 +320,14 @@ def test_domain_migration_creates_schema_and_indexes(tmp_path, monkeypatch) -> N
             "created_at",
             "updated_at",
             "voided_at",
+            "void_reason",
         } == {row[1] for row in connection.execute("PRAGMA table_info(money_transactions)")}
         assert {
             "id",
             "user_id",
             "transaction_id",
+            "position",
+            "label",
             "account_id",
             "category_id",
             "currency_code",
@@ -496,7 +499,150 @@ def test_migrations_are_idempotent(tmp_path, monkeypatch) -> None:
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0021_money_recurring_transactions",
+            "0023_money_transaction_void_reasons",
+        )
+
+
+def test_transaction_void_reason_migration_backfills_existing_voids(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, revision="0022_money_transaction_splits")
+
+    with sqlite3.connect(database_path) as connection:
+        timestamp = "2026-09-01 00:00:00"
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, updated_at, "
+            "password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "user-1",
+                "owner@example.com",
+                "hash",
+                1,
+                1,
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO money_transactions "
+            "(id, user_id, transaction_date, name, state, created_at, updated_at, voided_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "transaction-1",
+                "user-1",
+                "2026-09-01",
+                "Legacy reversal",
+                "voided",
+                timestamp,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT state, void_reason FROM money_transactions WHERE id = ?",
+            ("transaction-1",),
+        ).fetchone() == ("voided", "reversal")
+
+
+def test_split_migration_backfills_posting_positions(tmp_path, monkeypatch) -> None:
+    database_path = tmp_path / "cortex.db"
+    upgrade_database(database_path, monkeypatch, revision="0021_money_recurring_transactions")
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO users "
+            "(id, email, password_hash, is_active, is_owner, created_at, "
+            "updated_at, password_changed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "user-1",
+                "owner@example.com",
+                "hash",
+                1,
+                1,
+                "2026-09-01 00:00:00",
+                "2026-09-01 00:00:00",
+                "2026-09-01 00:00:00",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO money_accounts "
+            "(id, user_id, name, account_type, currency_code, opening_balance, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "account-1",
+                "user-1",
+                "Checking",
+                "checking",
+                "USD",
+                "0",
+                "2026-09-01 00:00:00",
+                "2026-09-01 00:00:00",
+            ),
+        )
+        for category_id, name in (("category-1", "Food"), ("category-2", "Home")):
+            connection.execute(
+                "INSERT INTO money_categories "
+                "(id, user_id, name, kind, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    category_id,
+                    "user-1",
+                    name,
+                    "expense",
+                    "2026-09-01 00:00:00",
+                    "2026-09-01 00:00:00",
+                ),
+            )
+        connection.execute(
+            "INSERT INTO money_transactions "
+            "(id, user_id, transaction_date, name, state, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "transaction-1",
+                "user-1",
+                "2026-09-01",
+                "Split",
+                "posted",
+                "2026-09-01 00:00:00",
+                "2026-09-01 00:00:00",
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO money_postings "
+            "(id, user_id, transaction_id, account_id, category_id, currency_code, amount) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("posting-b", "user-1", "transaction-1", "account-1", None, "USD", "-10"),
+                ("posting-a", "user-1", "transaction-1", None, "category-1", "USD", "10"),
+            ],
+        )
+
+    upgrade_database(database_path, monkeypatch)
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT id, position, label FROM money_postings ORDER BY position"
+        ).fetchall() == [("posting-a", 0, None), ("posting-b", 1, None)]
+        position_info = next(
+            row
+            for row in connection.execute("PRAGMA table_info(money_postings)")
+            if row[1] == "position"
+        )
+        assert position_info[3] == 1
+        assert (
+            connection.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'index' AND name = 'sqlite_autoindex_money_postings_1'"
+            ).fetchone()
+            is not None
         )
 
 

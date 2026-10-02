@@ -100,6 +100,15 @@ class UnbalancedTransactionError(MoneyError):
     message = "Transaction postings must balance to zero per currency."
 
 
+class InvalidSplitTransactionError(MoneyError):
+    status_code = 422
+    code = "money_invalid_split_transaction"
+    message = (
+        "A split transaction must contain one account posting and at least two labelled "
+        "category postings in one currency and direction."
+    )
+
+
 class TransactionTooSmallError(MoneyError):
     status_code = 422
     code = "money_transaction_requires_postings"
@@ -118,10 +127,28 @@ class TransactionVoidedError(MoneyError):
     message = "The transaction has already been voided."
 
 
+class TransactionVoidNotAllowedError(MoneyError):
+    status_code = 409
+    code = "money_transaction_void_not_allowed"
+    message = "Only standalone transactions without reconciled account postings can be voided."
+
+
+class TransactionRestoreNotAllowedError(MoneyError):
+    status_code = 409
+    code = "money_transaction_restore_not_allowed"
+    message = "Only manually voided standalone transactions can be restored."
+
+
 class InvalidReconciliationTransitionError(MoneyError):
     status_code = 409
     code = "money_invalid_reconciliation_transition"
     message = "The posting cannot perform that reconciliation transition."
+
+
+class InvalidReconciliationTargetError(MoneyError):
+    status_code = 409
+    code = "money_invalid_reconciliation_target"
+    message = "Only account postings can be cleared or reconciled."
 
 
 class InvalidArchiveStateError(MoneyError):

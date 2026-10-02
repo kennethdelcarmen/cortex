@@ -133,6 +133,11 @@ class MoneyTransaction(Base):
     __tablename__ = "money_transactions"
     __table_args__ = (
         CheckConstraint("state IN ('posted', 'voided')", name="ck_money_transactions_state"),
+        CheckConstraint(
+            "(state = 'posted' AND void_reason IS NULL) OR "
+            "(state = 'voided' AND void_reason IN ('manual', 'reversal'))",
+            name="ck_money_transactions_void_reason",
+        ),
         Index(
             "ix_money_transactions_owner_date_id",
             "user_id",
@@ -165,6 +170,7 @@ class MoneyTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
 
 class MoneyInstallmentPlan(Base):
@@ -386,7 +392,13 @@ class MoneyPosting(Base):
             "reconciliation_state IN ('uncleared', 'cleared', 'reconciled')",
             name="ck_money_postings_reconciliation",
         ),
+        CheckConstraint("position >= 0", name="ck_money_postings_position_nonnegative"),
         CheckConstraint("length(currency_code) = 3", name="ck_money_postings_currency"),
+        UniqueConstraint(
+            "transaction_id",
+            "position",
+            name="uq_money_postings_transaction_position",
+        ),
         Index(
             "ix_money_postings_owner_account_transaction",
             "user_id",
@@ -414,6 +426,8 @@ class MoneyPosting(Base):
     transaction_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("money_transactions.id", ondelete="CASCADE"), nullable=False
     )
+    position: Mapped[int] = mapped_column(nullable=False)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
     account_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("money_accounts.id", ondelete="RESTRICT"), nullable=True
     )

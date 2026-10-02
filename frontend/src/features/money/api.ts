@@ -28,6 +28,7 @@ export const moneyCurrencyCodes = [
 ] as const;
 export const moneyCategoryKindSchema = z.enum(["income", "expense"]);
 export const moneyTransactionStateSchema = z.enum(["posted", "voided"]);
+export const moneyTransactionVoidReasonSchema = z.enum(["manual", "reversal"]);
 export const moneyReconciliationStateSchema = z.enum([
   "uncleared",
   "cleared",
@@ -107,6 +108,8 @@ export const moneyBudgetSchema = z.object({
 
 export const moneyPostingSchema = z.object({
   id: z.string().min(1),
+  position: z.number().int().nonnegative(),
+  label: z.string().nullable(),
   account_id: z.string().min(1).nullable(),
   category_id: z.string().min(1).nullable(),
   currency_code: z.string().length(3),
@@ -128,6 +131,7 @@ export const moneyTransactionSchema = z.object({
   created_at: z.string().min(1),
   updated_at: z.string().min(1),
   voided_at: z.string().nullable(),
+  void_reason: moneyTransactionVoidReasonSchema.nullable(),
 });
 
 export const moneySummarySchema = z.object({
@@ -301,6 +305,7 @@ export type MoneyPostingInput = {
   category_id?: string;
   currency_code: string;
   amount: string;
+  label?: string | null;
 };
 
 export type MoneyTransactionInput = {
@@ -706,6 +711,22 @@ export function reverseMoneyTransaction(
   return apiFetch(
     `/api/v1/money/transactions/${encodeURIComponent(transactionId)}/reverse`,
     { method: "POST", body: payload ? JSON.stringify(payload) : undefined },
+    moneyTransactionSchema,
+  );
+}
+
+export function voidMoneyTransaction(transactionId: string) {
+  return apiFetch(
+    `/api/v1/money/transactions/${encodeURIComponent(transactionId)}/void`,
+    { method: "POST" },
+    moneyTransactionSchema,
+  );
+}
+
+export function restoreMoneyTransaction(transactionId: string) {
+  return apiFetch(
+    `/api/v1/money/transactions/${encodeURIComponent(transactionId)}/restore`,
+    { method: "POST" },
     moneyTransactionSchema,
   );
 }

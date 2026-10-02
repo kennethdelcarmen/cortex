@@ -196,6 +196,16 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
     assert reversal.status_code == 200, reversal.text
     assert reversal.json()["reversal_of_id"] == transaction_body["id"]
     assert reversal.json()["name"] == "Reversal of Saturday groceries"
+    original = await client.get(f"/api/v1/money/transactions/{transaction_body['id']}")
+    assert original.json()["void_reason"] == "reversal"
+    cannot_restore_original = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/restore",
+        headers=headers,
+    )
+    assert cannot_restore_original.status_code == 409
+    assert cannot_restore_original.json()["detail"]["code"] == (
+        "money_transaction_restore_not_allowed"
+    )
 
     final_account = await client.get(f"/api/v1/money/accounts/{account_body['id']}")
     assert final_account.json()["balance"] == "100.00"
@@ -217,6 +227,119 @@ async def test_money_crud_balancing_budgets_and_reversal(client: AsyncClient) ->
         "/api/v1/money/transactions", params={"include_voided": "true"}
     )
     assert {item["state"] for item in all_transactions.json()["items"]} == {"posted", "voided"}
+
+
+async def test_money_void_restore_and_account_only_reconciliation(client: AsyncClient) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+    account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Void checking",
+            "account_type": "checking",
+            "currency_code": "USD",
+            "opening_balance": "100.00",
+        },
+    )
+    category = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Void groceries", "kind": "expense"},
+    )
+    account_id = account.json()["id"]
+    category_id = category.json()["id"]
+    transaction = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-30",
+            "name": "Voidable groceries",
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-10.00"},
+                {"category_id": category_id, "currency_code": "USD", "amount": "10.00"},
+            ],
+        },
+    )
+    assert transaction.status_code == 201, transaction.text
+    transaction_body = transaction.json()
+    account_posting, category_posting = transaction_body["postings"]
+
+    budget = await client.put(
+        f"/api/v1/money/budgets/2026-09/{category_id}/USD",
+        headers=headers,
+        json={"amount": "25.00"},
+    )
+    assert budget.json()["spent_amount"] == "10.00"
+
+    for action in ("clear", "reconcile"):
+        response = await client.post(
+            f"/api/v1/money/transactions/{transaction_body['id']}/postings/"
+            f"{category_posting['id']}/{action}",
+            headers=headers,
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "money_invalid_reconciliation_target"
+
+    uncleared = await client.get(
+        "/api/v1/money/transactions", params={"reconciliation_state": "uncleared"}
+    )
+    assert [item["id"] for item in uncleared.json()["items"]] == [transaction_body["id"]]
+
+    cleared = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/postings/"
+        f"{account_posting['id']}/clear",
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    uncleared_after_clear = await client.get(
+        "/api/v1/money/transactions", params={"reconciliation_state": "uncleared"}
+    )
+    assert transaction_body["id"] not in {
+        item["id"] for item in uncleared_after_clear.json()["items"]
+    }
+
+    voided = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/void",
+        headers=headers,
+    )
+    assert voided.status_code == 200, voided.text
+    assert voided.json()["state"] == "voided"
+    assert voided.json()["void_reason"] == "manual"
+    assert (await client.get(f"/api/v1/money/accounts/{account_id}")).json()["balance"] == "100.00"
+    assert (await client.get(f"/api/v1/money/budgets/{budget.json()['id']}")).json()[
+        "spent_amount"
+    ] == "0.00"
+    assert transaction_body["id"] not in {
+        item["id"] for item in (await client.get("/api/v1/money/transactions")).json()["items"]
+    }
+    included = await client.get("/api/v1/money/transactions", params={"include_voided": "true"})
+    assert transaction_body["id"] in {item["id"] for item in included.json()["items"]}
+
+    restored = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/restore",
+        headers=headers,
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["state"] == "posted"
+    assert restored.json()["void_reason"] is None
+    assert (await client.get(f"/api/v1/money/accounts/{account_id}")).json()["balance"] == "90.00"
+    assert (await client.get(f"/api/v1/money/budgets/{budget.json()['id']}")).json()[
+        "spent_amount"
+    ] == "10.00"
+
+    reconciled = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/postings/"
+        f"{account_posting['id']}/reconcile",
+        headers=headers,
+    )
+    assert reconciled.status_code == 200, reconciled.text
+    cannot_void = await client.post(
+        f"/api/v1/money/transactions/{transaction_body['id']}/void",
+        headers=headers,
+    )
+    assert cannot_void.status_code == 409
+    assert cannot_void.json()["detail"]["code"] == "money_transaction_void_not_allowed"
 
 
 async def test_money_rejects_unbalanced_currency_and_auth_mutations(client: AsyncClient) -> None:
@@ -304,6 +427,208 @@ async def test_money_rejects_unbalanced_currency_and_auth_mutations(client: Asyn
         },
     )
     assert unsupported_currency.status_code == 422
+
+
+async def test_money_split_transaction_schema_validation_and_order(client: AsyncClient) -> None:
+    await setup_owner(client)
+    headers = await csrf_headers(client)
+
+    account = await client.post(
+        "/api/v1/money/accounts",
+        headers=headers,
+        json={
+            "name": "Split checking",
+            "account_type": "checking",
+            "currency_code": "USD",
+            "opening_balance": "100.00",
+        },
+    )
+    groceries = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Groceries", "kind": "expense"},
+    )
+    household = await client.post(
+        "/api/v1/money/categories",
+        headers=headers,
+        json={"name": "Household", "kind": "expense"},
+    )
+    assert account.status_code == 201
+    assert groceries.status_code == 201
+    assert household.status_code == 201
+
+    account_id = account.json()["id"]
+    groceries_id = groceries.json()["id"]
+    household_id = household.json()["id"]
+    split = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-28",
+            "name": "Market split",
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-30.00"},
+                {
+                    "category_id": groceries_id,
+                    "currency_code": "USD",
+                    "amount": "10.00",
+                    "label": "  Fresh food  ",
+                },
+                {
+                    "category_id": household_id,
+                    "currency_code": "USD",
+                    "amount": "20.00",
+                    "label": "Home supplies",
+                },
+            ],
+        },
+    )
+    assert split.status_code == 201, split.text
+    split_body = split.json()
+    assert [posting["position"] for posting in split_body["postings"]] == [0, 1, 2]
+    assert [posting["label"] for posting in split_body["postings"]] == [
+        None,
+        "Fresh food",
+        "Home supplies",
+    ]
+    fetched = await client.get(f"/api/v1/money/transactions/{split_body['id']}")
+    assert fetched.status_code == 200, fetched.text
+    assert [posting["label"] for posting in fetched.json()["postings"]] == [
+        None,
+        "Fresh food",
+        "Home supplies",
+    ]
+
+    updated = await client.patch(
+        f"/api/v1/money/transactions/{split_body['id']}",
+        headers=headers,
+        json={
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-30.00"},
+                {
+                    "category_id": household_id,
+                    "currency_code": "USD",
+                    "amount": "20.00",
+                    "label": "Home",
+                },
+                {
+                    "category_id": groceries_id,
+                    "currency_code": "USD",
+                    "amount": "10.00",
+                    "label": "Meals",
+                },
+            ]
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert [posting["position"] for posting in updated.json()["postings"]] == [0, 1, 2]
+    assert [posting["label"] for posting in updated.json()["postings"]] == [None, "Home", "Meals"]
+
+    missing_label = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-29",
+            "name": "Missing split label",
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-30.00"},
+                {"category_id": groceries_id, "currency_code": "USD", "amount": "10.00"},
+                {
+                    "category_id": household_id,
+                    "currency_code": "USD",
+                    "amount": "20.00",
+                    "label": "Home",
+                },
+            ],
+        },
+    )
+    assert missing_label.status_code == 422
+    assert missing_label.json()["detail"]["code"] == "money_invalid_split_transaction"
+
+    mixed_currency = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-29",
+            "name": "Mixed currency split",
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-10.00"},
+                {
+                    "category_id": groceries_id,
+                    "currency_code": "USD",
+                    "amount": "10.00",
+                    "label": "Food",
+                },
+                {
+                    "category_id": household_id,
+                    "currency_code": "EUR",
+                    "amount": "5.00",
+                    "label": "Home",
+                },
+                {
+                    "category_id": groceries_id,
+                    "currency_code": "EUR",
+                    "amount": "-5.00",
+                    "label": "Offset",
+                },
+            ],
+        },
+    )
+    assert mixed_currency.status_code == 422
+    assert mixed_currency.json()["detail"]["code"] == "money_invalid_split_transaction"
+
+    invalid_direction = await client.post(
+        "/api/v1/money/transactions",
+        headers=headers,
+        json={
+            "transaction_date": "2026-09-29",
+            "name": "Invalid split direction",
+            "postings": [
+                {"account_id": account_id, "currency_code": "USD", "amount": "-10.00"},
+                {
+                    "category_id": groceries_id,
+                    "currency_code": "USD",
+                    "amount": "15.00",
+                    "label": "Food",
+                },
+                {
+                    "category_id": household_id,
+                    "currency_code": "USD",
+                    "amount": "-5.00",
+                    "label": "Refund",
+                },
+            ],
+        },
+    )
+    assert invalid_direction.status_code == 422
+    assert invalid_direction.json()["detail"]["code"] == "money_invalid_split_transaction"
+
+    account_posting = updated.json()["postings"][0]
+    cleared = await client.post(
+        f"/api/v1/money/transactions/{split_body['id']}/postings/{account_posting['id']}/clear",
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    reconciled = await client.post(
+        f"/api/v1/money/transactions/{split_body['id']}/postings/{account_posting['id']}/reconcile",
+        headers=headers,
+    )
+    assert reconciled.status_code == 200, reconciled.text
+    locked = await client.patch(
+        f"/api/v1/money/transactions/{split_body['id']}",
+        headers=headers,
+        json={"postings": updated.json()["postings"]},
+    )
+    assert locked.status_code == 409
+    assert locked.json()["detail"]["code"] == "money_transaction_locked"
+
+    reversal = await client.post(
+        f"/api/v1/money/transactions/{split_body['id']}/reverse",
+        headers=headers,
+    )
+    assert reversal.status_code == 200, reversal.text
+    assert [posting["position"] for posting in reversal.json()["postings"]] == [0, 1, 2]
+    assert [posting["label"] for posting in reversal.json()["postings"]] == [None, "Home", "Meals"]
 
 
 async def test_money_summary_aggregates_currency_and_reversal_state(client: AsyncClient) -> None:
@@ -734,6 +1059,23 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
         assert created_category.status_code == 200, created_category.text
         category_list = await client.get("/api/v1/money/categories")
         category_id = category_list.json()["items"][0]["id"]
+        created_second_category = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 32,
+                "method": "tools/call",
+                "params": {
+                    "name": "create_money_category",
+                    "arguments": {"payload": {"name": "MCP household", "kind": "expense"}},
+                },
+            },
+        )
+        assert created_second_category.status_code == 200, created_second_category.text
+        second_category_id = json.loads(
+            created_second_category.json()["result"]["content"][0]["text"]
+        )["id"]
 
         created_transaction = await client.post(
             "/mcp/",
@@ -757,7 +1099,14 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
                                 {
                                     "category_id": category_id,
                                     "currency_code": "USD",
-                                    "amount": "5.00",
+                                    "amount": "2.00",
+                                    "label": "Food",
+                                },
+                                {
+                                    "category_id": second_category_id,
+                                    "currency_code": "USD",
+                                    "amount": "3.00",
+                                    "label": "Household",
                                 },
                             ],
                         }
@@ -770,6 +1119,94 @@ async def test_mcp_money_tools_share_rest_persistence(tmp_path, monkeypatch) -> 
         rest_transactions = await client.get("/api/v1/money/transactions")
         assert len(rest_transactions.json()["items"]) == 1
         assert rest_transactions.json()["items"][0]["name"] == "MCP transaction"
+        assert [
+            posting["label"] for posting in rest_transactions.json()["items"][0]["postings"]
+        ] == [None, "Food", "Household"]
+        fetched_transaction = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_money_transaction",
+                    "arguments": {"transaction_id": rest_transactions.json()["items"][0]["id"]},
+                },
+            },
+        )
+        assert fetched_transaction.status_code == 200, fetched_transaction.text
+        fetched_transaction_body = json.loads(
+            fetched_transaction.json()["result"]["content"][0]["text"]
+        )
+        assert [posting["position"] for posting in fetched_transaction_body["postings"]] == [
+            0,
+            1,
+            2,
+        ]
+        assert [posting["label"] for posting in fetched_transaction_body["postings"]] == [
+            None,
+            "Food",
+            "Household",
+        ]
+        transaction_id = rest_transactions.json()["items"][0]["id"]
+        invalid_mcp_clear = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "clear_money_posting",
+                    "arguments": {
+                        "transaction_id": transaction_id,
+                        "posting_id": fetched_transaction_body["postings"][1]["id"],
+                    },
+                },
+            },
+        )
+        assert invalid_mcp_clear.status_code == 200, invalid_mcp_clear.text
+        invalid_mcp_clear_result = invalid_mcp_clear.json()["result"]
+        assert invalid_mcp_clear_result["isError"] is True
+        assert (
+            "money_invalid_reconciliation_target" in invalid_mcp_clear_result["content"][0]["text"]
+        )
+
+        voided = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {
+                    "name": "void_money_transaction",
+                    "arguments": {"transaction_id": transaction_id},
+                },
+            },
+        )
+        assert voided.status_code == 200, voided.text
+        voided_body = json.loads(voided.json()["result"]["content"][0]["text"])
+        assert voided_body["void_reason"] == "manual"
+
+        restored = await client.post(
+            "/mcp/",
+            headers=headers,
+            json={
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "restore_money_transaction",
+                    "arguments": {"transaction_id": transaction_id},
+                },
+            },
+        )
+        assert restored.status_code == 200, restored.text
+        restored_body = json.loads(restored.json()["result"]["content"][0]["text"])
+        assert restored_body["state"] == "posted"
+        assert restored_body["void_reason"] is None
         rest_summary = await client.get(
             "/api/v1/money/summary",
             params={"period": "2026-09", "currency_code": "USD"},

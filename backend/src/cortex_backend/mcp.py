@@ -145,6 +145,7 @@ from .money.service import (
     restore_account,
     restore_category,
     restore_payee,
+    restore_transaction,
     resume_recurring_transaction,
     reverse_transaction,
     update_account,
@@ -153,6 +154,7 @@ from .money.service import (
     update_recurring_transaction,
     update_transaction,
     upsert_budget,
+    void_transaction,
 )
 from .recovery.errors import RecoveryError
 from .recovery.schemas import (
@@ -436,6 +438,8 @@ def _money_transaction_response(record: TransactionRecord) -> TransactionRespons
         postings=[
             PostingResponse(
                 id=posting.id,
+                position=posting.position,
+                label=posting.label,
                 account_id=posting.account_id,
                 category_id=posting.category_id,
                 currency_code=posting.currency_code,
@@ -449,6 +453,7 @@ def _money_transaction_response(record: TransactionRecord) -> TransactionRespons
         created_at=record.created_at,
         updated_at=record.updated_at,
         voided_at=record.voided_at,
+        void_reason=record.void_reason,
     )
 
 
@@ -1563,6 +1568,36 @@ def create_mcp_server(
         try:
             record = await reverse_transaction(
                 database_storage(storage), get_mcp_auth().user.id, transaction_id, payload
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="void_money_transaction")
+    async def void_money_transaction_tool(
+        transaction_id: str, ctx: Context | None = None
+    ) -> TransactionResponse:
+        """Void one standalone owner-scoped transaction before reconciliation."""
+
+        del ctx
+        try:
+            record = await void_transaction(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id
+            )
+        except MoneyError as exc:
+            _raise_money_tool(exc)
+        return _money_transaction_response(record)
+
+    @server.tool(name="restore_money_transaction")
+    async def restore_money_transaction_tool(
+        transaction_id: str, ctx: Context | None = None
+    ) -> TransactionResponse:
+        """Restore one manually voided owner-scoped transaction."""
+
+        del ctx
+        try:
+            record = await restore_transaction(
+                database_storage(storage), get_mcp_auth().user.id, transaction_id
             )
         except MoneyError as exc:
             _raise_money_tool(exc)

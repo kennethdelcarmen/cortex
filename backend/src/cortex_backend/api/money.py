@@ -99,6 +99,7 @@ from ..money.service import (
     restore_account,
     restore_category,
     restore_payee,
+    restore_transaction,
     resume_recurring_transaction,
     reverse_transaction,
     update_account,
@@ -107,6 +108,7 @@ from ..money.service import (
     update_recurring_transaction,
     update_transaction,
     upsert_budget,
+    void_transaction,
 )
 from ..storage import DatabaseStorage
 from .dependencies import get_current_auth, get_database_storage, require_csrf_auth
@@ -203,6 +205,8 @@ def _transaction_response(record: TransactionRecord) -> TransactionResponse:
         postings=[
             PostingResponse(
                 id=posting.id,
+                position=posting.position,
+                label=posting.label,
                 account_id=posting.account_id,
                 category_id=posting.category_id,
                 currency_code=posting.currency_code,
@@ -216,6 +220,7 @@ def _transaction_response(record: TransactionRecord) -> TransactionResponse:
         created_at=record.created_at,
         updated_at=record.updated_at,
         voided_at=record.voided_at,
+        void_reason=record.void_reason,
     )
 
 
@@ -1024,6 +1029,32 @@ async def reverse_transaction_route(
     try:
         return _transaction_response(
             await reverse_transaction(storage, auth.user.id, transaction_id, payload)
+        )
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post("/transactions/{transaction_id}/void", response_model=TransactionResponse)
+async def void_transaction_route(
+    transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TransactionResponse:
+    try:
+        return _transaction_response(await void_transaction(storage, auth.user.id, transaction_id))
+    except MoneyError as exc:
+        _raise_http(exc)
+
+
+@router.post("/transactions/{transaction_id}/restore", response_model=TransactionResponse)
+async def restore_transaction_route(
+    transaction_id: str,
+    storage: Annotated[DatabaseStorage, Depends(get_database_storage)],
+    auth: Annotated[CurrentAuth, Depends(require_csrf_auth)],
+) -> TransactionResponse:
+    try:
+        return _transaction_response(
+            await restore_transaction(storage, auth.user.id, transaction_id)
         )
     except MoneyError as exc:
         _raise_http(exc)

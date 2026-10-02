@@ -51,6 +51,11 @@ class TransactionState(StrEnum):
     VOIDED = "voided"
 
 
+class TransactionVoidReason(StrEnum):
+    MANUAL = "manual"
+    REVERSAL = "reversal"
+
+
 class ReconciliationState(StrEnum):
     UNCLEARED = "uncleared"
     CLEARED = "cleared"
@@ -303,12 +308,21 @@ class PostingRequest(BaseModel):
         return self
 
 
+class TransactionPostingRequest(PostingRequest):
+    label: str | None = Field(default=None, max_length=200)
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str | None) -> str | None:
+        return normalize_display_name(value) if value is not None else None
+
+
 class TransactionCreateRequest(BaseModel):
     transaction_date: date
     name: str = Field(min_length=1, max_length=200)
     payee_id: str | None = None
     memo: str | None = Field(default=None, max_length=10_000)
-    postings: list[PostingRequest] = Field(min_length=2, max_length=100)
+    postings: list[TransactionPostingRequest] = Field(min_length=2, max_length=100)
 
     @field_validator("memo")
     @classmethod
@@ -329,7 +343,9 @@ class TransactionUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     payee_id: str | None = None
     memo: str | None = Field(default=None, max_length=10_000)
-    postings: list[PostingRequest] | None = Field(default=None, min_length=2, max_length=100)
+    postings: list[TransactionPostingRequest] | None = Field(
+        default=None, min_length=2, max_length=100
+    )
 
     @field_validator("memo")
     @classmethod
@@ -549,6 +565,8 @@ class MoneySummaryResponse(BaseModel):
 
 class PostingResponse(BaseModel):
     id: str
+    position: int
+    label: str | None
     account_id: str | None
     category_id: str | None
     currency_code: str
@@ -570,6 +588,7 @@ class TransactionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     voided_at: datetime | None
+    void_reason: TransactionVoidReason | None
 
 
 class AccountListResponse(BaseModel):

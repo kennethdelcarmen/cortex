@@ -6,11 +6,16 @@ import type {
 } from "./api";
 
 export type TransactionMode = "expense" | "income" | "transfer";
+export type SplitDirection = "expense" | "income";
 
 const currencyFractionDigits: Record<string, number> = {
   JPY: 0,
   KRW: 0,
 };
+
+export function currencyDigits(currencyCode: string) {
+  return currencyFractionDigits[currencyCode] ?? 2;
+}
 
 export function currentPeriod() {
   const now = new Date();
@@ -58,7 +63,22 @@ export function formatSignedMoney(amount: string | number, currencyCode = "PHP")
 export function formatAmountInput(value: string, currencyCode: string) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) return "";
-  return numericValue.toFixed(currencyFractionDigits[currencyCode] ?? 2);
+  return numericValue.toFixed(currencyDigits(currencyCode));
+}
+
+export function parseMoneyMinorUnits(value: string, currencyCode: string) {
+  const trimmed = value.trim();
+  if (!/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(trimmed)) return null;
+  const digits = currencyDigits(currencyCode);
+  const [whole, fraction = ""] = trimmed.split(".");
+  if (fraction.length > digits) return null;
+  return Number(whole) * 10 ** digits + Number(fraction.padEnd(digits, "0"));
+}
+
+export function formatMinorUnits(value: number, currencyCode: string) {
+  const digits = currencyDigits(currencyCode);
+  const divisor = 10 ** digits;
+  return (value / divisor).toFixed(digits);
 }
 
 export function accountLabel(account: MoneyAccount) {
@@ -80,6 +100,18 @@ export function transactionAccountPostings(transaction: MoneyTransaction) {
 
 export function transactionCategoryPostings(transaction: MoneyTransaction) {
   return transaction.postings.filter((posting) => posting.category_id);
+}
+
+export function isSplitTransaction(transaction: MoneyTransaction) {
+  return transactionAccountPostings(transaction).length === 1
+    && transactionCategoryPostings(transaction).length >= 2;
+}
+
+export function splitDirection(transaction: MoneyTransaction): SplitDirection | null {
+  if (!isSplitTransaction(transaction)) return null;
+  const accountPosting = transactionAccountPostings(transaction)[0];
+  if (!accountPosting) return null;
+  return Number(accountPosting.amount) < 0 ? "expense" : "income";
 }
 
 export function transactionDisplayAmount(transaction: MoneyTransaction) {
